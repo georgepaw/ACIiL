@@ -8,6 +8,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/ACIiL.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 using namespace llvm;
 
@@ -24,37 +25,57 @@ namespace {
       for(Function &F : M)
       {
         errs() << "Function : " << F.getName() << " found!\n";
-        if(F.getName() == "fmad")
-        // if(F.getName() == "foo" || F.getName() == "bar")
+        if (F.isDeclaration())
         {
-          errs() << F.getName() << "\n";
-          for(BasicBlock &B : F)
+          errs() << "This functions decleration is outside of the current transaltion unit.\n";
+          errs() << "This function is used " << F.getNumUses() << " times, by:\n";
+          for(User *U : F.users())
           {
-            for(Instruction &I : B)
+            if(isa<CallInst>(U))
             {
-              if(I.getOpcode() == Instruction::FAdd)
+              Instruction * caller = dyn_cast<Instruction>(U);
+              std::string str;
+              raw_string_ostream rso(str);
+              caller->print(rso);
+              errs() << "* " << caller->getFunction()->getName() << "\n";
+              errs() << "\t- Instruction"  << str << "\n";
+              errs() << "\t- Users:\n";
+              for(Value *v : caller->users())
               {
-                BinaryOperator* op = dyn_cast<BinaryOperator>(&I);
-                IRBuilder<> builder(op);
-                Value* lhs = op->getOperand(0);
-                Value* rhs = op->getOperand(1);
-                Value* mul = builder.CreateFSub(lhs, rhs);
-                
-                I.replaceAllUsesWith(mul);
-
-                // for (auto& U : op->uses()) {
-                  // U->dump();
-                  // User* user = U.getUser();  // A User is anything with operands.
-                  // user->replaceUsesOfWith(U, mul);
-
-                  // user->setOperand(U.getOperandNo(), mul);
-                // }
-                modified = true;
-                I.eraseFromParent();
+                Instruction * i = dyn_cast<Instruction>(v);
+                std::string str;
+                raw_string_ostream rso(str);
+                i->print(rso);
+                errs() << "\t\t*" << str << "\n";
+              }
+              errs() << "\t- Uses:\n";
+              for(Value *v : caller->operands())
+              {
+                std::string str;
+                if(isa<Function>(v))
+                {
+                  Function * f = dyn_cast<Function>(v);
+                  str = "  ";
+                  str += f->getName();
+                }
+                else
+                {
+                  raw_string_ostream rso(str);
+                  v->print(rso);
+                }
+                errs() << "\t\t*" << str << "\n";
               }
             }
           }
-          F.dump();
+        }
+        else //(!F.isDeclaration())
+        {
+          uint32_t num_block = F.getBasicBlockList().size();
+          errs() << "This function has " << num_block << " BasicBlocks\n";
+        }
+        if(F.getName() == "main")
+        {
+          // F.end()->dump();
         }
       }
       return modified;
