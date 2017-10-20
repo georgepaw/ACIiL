@@ -834,6 +834,8 @@ void PassManagerBuilder::addLateLTOOptimizationPasses(
   // currently it damages debug info.
   if (MergeFunctions)
     PM.add(createMergeFunctionsPass());
+
+  PM.add(createACIiLLinkingPass());
 }
 
 void PassManagerBuilder::populateThinLTOPassManager(
@@ -897,8 +899,6 @@ void PassManagerBuilder::populateLTOPassManager(legacy::PassManagerBase &PM) {
 
   if (VerifyOutput)
     PM.add(createVerifierPass());
-
-  PM.add(createACIiLLinkingPass());
 }
 
 inline PassManagerBuilder *unwrap(LLVMPassManagerBuilderRef P) {
