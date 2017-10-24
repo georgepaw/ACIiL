@@ -11,7 +11,7 @@
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
-#include "llvm/Transforms/ACIiL/ModuleCFG.h"
+#include "llvm/Transforms/ACIiL/CFGModule.h"
 
 using namespace llvm;
 
@@ -28,8 +28,8 @@ namespace {
 
       if(!mainFunction) return modified;
       modified = true;
-      ModuleCFG moduleCFG(M, *mainFunction);
-      moduleCFG.dump();
+      CFGModule cfgModule(M, *mainFunction);
+      cfgModule.dump();
 
 
       // for(Function &F : M)

@@ -1,105 +1,23 @@
-#include "llvm/Transforms/ACIiL/FunctionCFG.h"
+#include "llvm/Transforms/ACIiL/CFGFunction.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/ACIiL/CFGOperand.h"
+#include "llvm/Transforms/ACIiL/CFGNode.h"
+#include "llvm/Transforms/ACIiL/CFGEdge.h"
 
 #include <set>
 
 using namespace llvm;
 
-CFGOperand::CFGOperand(Value * v)
-{
-  value = v;
-  fromPHI = false;
-  sourcePHIBlock = NULL;
-}
-
-CFGOperand::CFGOperand(Value * v, BasicBlock * b)
-{
-  value = v;
-  fromPHI = true;
-  sourcePHIBlock = b;
-}
-
-Value * CFGOperand::getValue()
-{
-  return value;
-}
-bool CFGOperand::isFromPHI()
-{
-  return fromPHI;
-}
-BasicBlock * CFGOperand::getSourcePHIBlock()
-{
-  return sourcePHIBlock;
-}
-
-CFGNode::CFGNode(BasicBlock &b) : block(b)
-{
-  for(BasicBlock::iterator end = --block.end(), start = --block.begin(); end != start; end--)
-  {
-    Instruction &inst = *end;
-    //get defines
-    //if it has a non void return then it defines
-    if(!end->getType()->isVoidTy()) def.insert(&inst);
-
-    //get uses
-    //TODO: dyn_cast does not work here and have to do it explicitly
-    if(isa<PHINode>(inst))
-    {
-      //if it's a phi instruction
-      PHINode &phi = cast<PHINode>(inst);
-      for(Use &u : phi.operands())
-      {
-        //at the momemnt assume if the operand is a result of instruction then it should be in use set
-        if(isa<Instruction>(u)) use.insert(CFGOperand(u, phi.getIncomingBlock(u)));
-      }
-    }
-    else
-    {
-      //otherwise just iterate over operands
-      for(Value *v : end->operands())
-      {
-        //at the momemnt assume if the operand is a result of instruction then it should be in use set
-        if(isa<Instruction>(v)) use.insert(CFGOperand(v));
-      }
-    }
-  }
-}
-
-std::set<Value*> &CFGNode::getDef()
-{
-  return def;
-}
-
-std::set<CFGOperand> &CFGNode::getUse()
-{
-  return use;
-}
-
-BasicBlock &CFGNode::getBlock()
-{
-  return block;
-}
-
-BasicBlock &CFGEdge::getFrom()
-{
-  return from;
-}
-
-BasicBlock &CFGEdge::getTo()
-{
-  return to;
-}
-
-FunctionCFG::FunctionCFG(Function & f) : function(f)
+CFGFunction::CFGFunction(Function & f) : function(f)
 {
   setUpCFG();
 }
 
-void FunctionCFG::setUpCFG()
+void CFGFunction::setUpCFG()
 {
   //first need to prep basic blocks
   //if there are any phi instructions in the basicblock then
@@ -137,6 +55,7 @@ void FunctionCFG::setUpCFG()
     B->splitBasicBlock(I, B->getName() + ".no_phis");
   }
 
+
   for(BasicBlock &B : function)
   {
     nodes.push_back(CFGNode(B));
@@ -148,7 +67,7 @@ void FunctionCFG::setUpCFG()
   // if(function.getName() == "main") function.viewCFG();
 }
 
-void FunctionCFG::dump()
+void CFGFunction::dump()
 {
   errs() << "\nCFG for function " << function.getName() << "\n";
   errs() << "There are " << nodes.size() << " nodes:\n";
@@ -164,7 +83,7 @@ void FunctionCFG::dump()
     errs() << "use: \n";
     for(CFGOperand v : node.getUse())
     {
-      errs() << *v.getValue() << "\n";
+      v.dump();
     }
     errs() << "\n";
   }
@@ -176,7 +95,7 @@ void FunctionCFG::dump()
   }
 }
 
-Function &FunctionCFG::getFunction()
+Function &CFGFunction::getFunction()
 {
   return function;
 }

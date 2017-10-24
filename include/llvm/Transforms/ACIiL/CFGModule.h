@@ -1,27 +1,27 @@
 
-#ifndef LLVM_TRANSFORMS_ACIIL_ModuleCFG_H
-#define LLVM_TRANSFORMS_ACIIL_ModuleCFG_H
+#ifndef LLVM_TRANSFORMS_ACIIL_CFGMODULE_H
+#define LLVM_TRANSFORMS_ACIIL_CFGMODULE_H
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/Transforms/ACIiL/FunctionCFG.h"
+#include "llvm/Transforms/ACIiL/CFGFunction.h"
 
 #include <map>
 
 namespace llvm
 {
-class ModuleCFG
+class CFGModule
 {
 public:
-  ModuleCFG(Module &m, Function &ef);
+  CFGModule(Module &m, Function &ef);
   void dump();
   Module &getModule();
 private:
   void setUpCFGs();
   Module &module;
   Function &entryFunction;
-  std::map<StringRef, FunctionCFG> function_cfgs;
+  std::map<StringRef, CFGFunction> function_cfgs;
 };
 
 }//namespace

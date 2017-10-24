@@ -1,7 +1,10 @@
 add_llvm_library(LLVMACIiL
   aciil.cpp
-  FunctionCFG.cpp
-  ModuleCFG.cpp
+  CFGFunction.cpp
+  CFGModule.cpp
+  CFGOperand.cpp
+  CFGNode.cpp
+  CFGEdge.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms
