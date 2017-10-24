@@ -35,3 +35,8 @@ void ModuleCFG::dump()
   }
   errs() << "\n";
 }
+
+Module &ModuleCFG::getModule()
+{
+  return module;
+}

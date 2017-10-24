@@ -16,6 +16,7 @@ class ModuleCFG
 public:
   ModuleCFG(Module &m, Function &ef);
   void dump();
+  Module &getModule();
 private:
   void setUpCFGs();
   Module &module;
