@@ -14,7 +14,7 @@ int64_t __aciil_checkpoint_counter = 0;
 int64_t __aciil_argument_counter = 0;
 uint8_t __aciil_perform_checkpoint = 1;
 
-void __aciil_setup_checkpoints()
+void __aciil_checkpoint_setup()
 {
   //get the current time in microseconds
   struct timespec tms;
@@ -41,7 +41,7 @@ void __aciil_setup_checkpoints()
   }
 }
 
-void __aciil_start_checkpoint(int64_t label_number)
+void __aciil_checkpoint_start(int64_t label_number)
 {
   if(!__aciil_perform_checkpoint)
     return;
@@ -73,7 +73,7 @@ void __aciil_start_checkpoint(int64_t label_number)
   free(file_path);
 }
 
-void __aciil_checkpoint(int64_t sizeBits, char * data)
+void __aciil_checkpoint_pointer(int64_t sizeBits, char * data)
 {
   if(!__aciil_perform_checkpoint)
     return;
@@ -110,7 +110,7 @@ void __aciil_checkpoint(int64_t sizeBits, char * data)
   free(file_path);
 }
 
-void __aciil_finish_checkpoint()
+void __aciil_checkpoint_finish()
 {
   if(!__aciil_perform_checkpoint)
     return;

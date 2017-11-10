@@ -70,12 +70,12 @@ namespace {
       }
 
       //load the checkpointing functions
-      Function * aciilSetupCheckpoint = M.getFunction("__aciil_setup_checkpoints");
-      Function * aciilStartCheckpoint = M.getFunction("__aciil_start_checkpoint");
-      Function * aciilCheckpoint = M.getFunction("__aciil_checkpoint");
-      Function * aciilFinishCheckpoint = M.getFunction("__aciil_finish_checkpoint");
-      if(!aciilSetupCheckpoint || !aciilStartCheckpoint
-        || !aciilCheckpoint || !aciilFinishCheckpoint)
+      Function * aciilCheckpointSetup = M.getFunction("__aciil_checkpoint_setup");
+      Function * aciilCheckpointStart = M.getFunction("__aciil_checkpoint_start");
+      Function * aciilCheckpointPointer = M.getFunction("__aciil_checkpoint_pointer");
+      Function * aciilCheckpointFinish = M.getFunction("__aciil_checkpoint_finish");
+      if(!aciilCheckpointSetup || !aciilCheckpointStart
+        || !aciilCheckpointPointer || !aciilCheckpointFinish)
       {
         errs() << "could not load the checkpointing functions, checkpointing will not be added\n";
         return false;
@@ -180,7 +180,7 @@ namespace {
         CallInst* ciGetLabel = builder.CreateCall(aciilRestartGetLabel, emptyArgs);
 
         // //insert the checkpoint set up call
-        builder.CreateCall(aciilSetupCheckpoint, emptyArgs);
+        builder.CreateCall(aciilCheckpointSetup, emptyArgs);
 
         //insert the switch with the default being carry on as if not checkpoint happened
         SwitchInst * si = builder.CreateSwitch(ciGetLabel, noCREntry, checkpointAndRestartBlocks.size());
@@ -208,7 +208,7 @@ namespace {
         {
           std::vector<Value*> args;
           args.push_back(ConstantInt::get(i64Type, label, true));
-          builder.CreateCall(aciilStartCheckpoint, args);
+          builder.CreateCall(aciilCheckpointStart, args);
         }
         //for every live variable
         for(CFGOperand op : node->getIn())
@@ -227,13 +227,13 @@ namespace {
           uint64_t numBits = dataLayout.getTypeSizeInBits(v->getType());
           checkpointArgs.push_back(ConstantInt::get(i64Type, numBits, false));
           checkpointArgs.push_back(bc);
-          builder.CreateCall(aciilCheckpoint, checkpointArgs);
+          builder.CreateCall(aciilCheckpointPointer, checkpointArgs);
         }
 
         //add a checkpoint clean up call at the end
         {
           std::vector<Value*> args;
-          builder.CreateCall(aciilFinishCheckpoint, args);
+          builder.CreateCall(aciilCheckpointFinish, args);
         }
 
         //set up the restart block
