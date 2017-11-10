@@ -3,7 +3,7 @@
 
 int main(int argc, char const *argv[])
 {
-  int N = 5000;
+  int N = 1001;
 	double a = 2.45;
 	double b = 3.12;
 	double c = 0.0;

@@ -21,6 +21,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/IRBuilder.h"
 
 #include <iterator> 
 
@@ -151,32 +152,38 @@ namespace {
 
       //otherwise insert the restart function and add the branch instructions for a restart
       {
+        //the entry block is transformed in the following way
+        //1. all instructions from entry are copied to a new block
+        //2. all phi nodes are updated with that new block
+        //3. Function for checkpoint and restart and inserted into the entry block
+        //4. a switch statment is used to either perform a restart or run the program form the beginning (the new entry block)
         BasicBlock &entry = cfgMain.getFunction().getEntryBlock();
-        BasicBlock * crEntry = BasicBlock::Create(M.getContext(), "no_cr_entry", &cfgMain.getFunction());
+        BasicBlock * noCREntry = BasicBlock::Create(M.getContext(), "no_cr_entry", &cfgMain.getFunction());
 
-        for (succ_iterator I = succ_begin(&entry), E = succ_end(&entry); I != E; ++I) {
-          // Loop over any phi nodes in the basic block, updating the BB field of
-          // incoming values...
-          BasicBlock *Successor = *I;
-          for (auto &PN : Successor->phis()) {
+        //loop over all successor blocks
+        for (BasicBlock * Successor : successors(&entry)) {
+          for (PHINode &PN : Successor->phis()) {
             int Idx = PN.getBasicBlockIndex(&entry);
             while (Idx != -1) {
-              PN.setIncomingBlock((unsigned)Idx, crEntry);
+              PN.setIncomingBlock((unsigned)Idx, noCREntry);
               Idx = PN.getBasicBlockIndex(&entry);
             }
           }
         }
-        crEntry->getInstList().splice(crEntry->end(), entry.getInstList(), entry.begin(), entry.end());
+        //copy the instructions over to the new entry block
+        noCREntry->getInstList().splice(noCREntry->end(), entry.getInstList(), entry.begin(), entry.end());
 
+        //insert the calls
         std::vector<Value*> emptyArgs;
+        IRBuilder<> builder(&entry);
         //insert the call that gets the label for the restart
-        CallInst* ciGetLabel = CallInst::Create(aciilRestartGetLabel, emptyArgs, "", &entry);
+        CallInst* ciGetLabel = builder.CreateCall(aciilRestartGetLabel, emptyArgs);
 
         // //insert the checkpoint set up call
-        CallInst::Create(aciilSetupCheckpoint, emptyArgs, "", &entry);
+        builder.CreateCall(aciilSetupCheckpoint, emptyArgs);
 
         //insert the switch with the default being carry on as if not checkpoint happened
-        SwitchInst * si = SwitchInst::Create(ciGetLabel, crEntry, checkpointAndRestartBlocks.size(), &entry);
+        SwitchInst * si = builder.CreateSwitch(ciGetLabel, noCREntry, checkpointAndRestartBlocks.size());
         for(std::tuple<CFGNode*, BasicBlock*, BasicBlock*, int64_t> tuple : checkpointAndRestartBlocks)
         {
           si->addCase(ConstantInt::get(M.getContext(), APInt(64, std::get<3>(tuple), true)), std::get<2>(tuple));
@@ -192,15 +199,16 @@ namespace {
         int64_t label;
         std::tie(node, checkpointBlock, restartBlock, label) = tuple;
 
-        Instruction * checkpointBlockBranchInstruction = &checkpointBlock->front();
-        Instruction * restartBlockBranchInstruction = &restartBlock->front();
+        IRBuilder<> builder(checkpointBlock);
+        //insert instructions before the branch
+        builder.SetInsertPoint(&checkpointBlock->front());
 
         //set up the checkpoint block
         //firstly call the start checkpoint function
         {
           std::vector<Value*> args;
           args.push_back(ConstantInt::get(i64Type, label, true));
-          CallInst::Create(aciilStartCheckpoint, args, "", checkpointBlockBranchInstruction);
+          builder.CreateCall(aciilStartCheckpoint, args);
         }
         //for every live variable
         for(CFGOperand op : node->getIn())
@@ -208,51 +216,47 @@ namespace {
           Value * v = op.getValue();
 
           //First alloca an array with just one element
-          AllocaInst * ai = new AllocaInst(v->getType(),
-                                  0, //address space
-                                  llvm::ConstantInt::get(i32Type, 1, true), //array size
-                                  4, //aligment
-                                  v->getName() + ".addr",
-                                  checkpointBlockBranchInstruction);
+          AllocaInst * ai = builder.CreateAlloca(v->getType(),
+                                                  llvm::ConstantInt::get(i32Type, 1, true), //array size
+                                                  v->getName() + ".addr");
           //Then store the value in that alloca
-          StoreInst * si = new StoreInst(v, ai, checkpointBlockBranchInstruction);
+          builder.CreateStore(v, ai);
           //bitcast it to bytes
-          BitCastInst * bc = new BitCastInst(ai, i8PType, ai->getName() + ".i8", checkpointBlockBranchInstruction);
-          std::vector<Value*> args;
+          Value * bc = builder.CreateBitCast(ai, i8PType, ai->getName() + ".i8");
+          std::vector<Value*> checkpointArgs;
           uint64_t numBits = dataLayout.getTypeSizeInBits(v->getType());
-          args.push_back(ConstantInt::get(i64Type, numBits, false));
-          args.push_back(bc);
-          CallInst::Create(aciilCheckpoint, args, "", checkpointBlockBranchInstruction);
+          checkpointArgs.push_back(ConstantInt::get(i64Type, numBits, false));
+          checkpointArgs.push_back(bc);
+          builder.CreateCall(aciilCheckpoint, checkpointArgs);
         }
 
-        //add a clean up call at the end
+        //add a checkpoint clean up call at the end
         {
           std::vector<Value*> args;
-          CallInst::Create(aciilFinishCheckpoint, args, "", checkpointBlockBranchInstruction);
+          builder.CreateCall(aciilFinishCheckpoint, args);
         }
 
         //set up the restart block
+        builder.SetInsertPoint(&restartBlock->front());
         //for every live variable
         for(CFGOperand op : node->getIn())
         {
           Value * v = op.getValue();
 
           //First alloca an array with just one element
-          AllocaInst * ai = new AllocaInst(v->getType(),
-                                  0, //address space
-                                  llvm::ConstantInt::get(i32Type, 1, true), //array size
-                                  4, //aligment
-                                  v->getName() + ".addr",
-                                  restartBlockBranchInstruction);
+          AllocaInst * ai = builder.CreateAlloca(v->getType(),
+                                                  llvm::ConstantInt::get(i32Type, 1, true), //array size
+                                                  v->getName() + ".addr");
           //bitcast it to bytes
-          BitCastInst * bc = new BitCastInst(ai, i8PType, ai->getName() + ".i8", restartBlockBranchInstruction);
-          std::vector<Value*> args;
+          Value * bc = builder.CreateBitCast(ai, i8PType, ai->getName() + ".i8");
+          std::vector<Value*> restartArgs;
           uint64_t numBits = dataLayout.getTypeSizeInBits(v->getType());
-          args.push_back(ConstantInt::get(i64Type, numBits, false));
-          args.push_back(bc);
+          restartArgs.push_back(ConstantInt::get(i64Type, numBits, false));
+          restartArgs.push_back(bc);
           //call the load function with the correct address
-          CallInst::Create(aciilRestartReadFromCheckpoint, args, "", restartBlockBranchInstruction);
-          LoadInst * li = new LoadInst(ai, v->getName() + ".restart", restartBlockBranchInstruction);
+          builder.CreateCall(aciilRestartReadFromCheckpoint, restartArgs);
+
+          LoadInst * li = builder.CreateLoad(ai, v->getName() + ".restart");
 
           //add a phi instruction for this variable in the correct block
           PHINode * resultOfCheckpointRestart = PHINode::Create(v->getType(), 0, v->getName() + ".cr", &node->getBlock().front());
