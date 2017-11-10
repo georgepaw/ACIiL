@@ -4,7 +4,7 @@ add_llvm_library(LLVMACIiL
   CFGModule.cpp
   CFGOperand.cpp
   CFGNode.cpp
-  CFGEdge.cpp
+  CFGUtils.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms

@@ -3,7 +3,6 @@
 #define LLVM_TRANSFORMS_ACIIL_CFGFUNCTION_H
 
 #include "llvm/Transforms/ACIiL/CFGNode.h"
-#include "llvm/Transforms/ACIiL/CFGEdge.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Value.h"
@@ -19,11 +18,13 @@ public:
   CFGFunction(Function &f);
   void dump();
   Function &getFunction();
+  std::vector<CFGNode> &getNodes();
 private:
   void setUpCFG();
+  void doLiveAnalysis();
+  CFGNode* findNode(BasicBlock &b);
   Function &function;
   std::vector<CFGNode> nodes;
-  std::vector<CFGEdge> edges;
 };
 
 }//namespace

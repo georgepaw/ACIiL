@@ -40,3 +40,13 @@ Module &CFGModule::getModule()
 {
   return module;
 }
+
+std::map<StringRef, CFGFunction> &CFGModule::getFunctions()
+{
+  return function_cfgs;
+}
+
+CFGFunction &CFGModule::getEntryFunction()
+{
+  return function_cfgs.find(entryFunction.getName())->second;
+}

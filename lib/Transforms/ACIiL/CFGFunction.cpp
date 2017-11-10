@@ -6,15 +6,25 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/ACIiL/CFGOperand.h"
 #include "llvm/Transforms/ACIiL/CFGNode.h"
-#include "llvm/Transforms/ACIiL/CFGEdge.h"
+#include "llvm/Transforms/ACIiL/CFGUtils.h"
 
 #include <set>
+#include <map>
 
 using namespace llvm;
 
 CFGFunction::CFGFunction(Function & f) : function(f)
 {
   setUpCFG();
+}
+
+CFGNode* CFGFunction::findNode(BasicBlock &b)
+{
+  for(CFGNode &node : nodes)
+  {
+    if(&node.getBlock() == &b) return &node;
+  }
+  return NULL;
 }
 
 void CFGFunction::setUpCFG()
@@ -48,23 +58,86 @@ void CFGFunction::setUpCFG()
       }
     }
   }
+
+  std::set<BasicBlock*> phiNodes;
+
   // Once all the locations to split on have been found then perform the splits
   for(Instruction *I : splitLocations)
   {
     BasicBlock * B = I->getParent();
     B->splitBasicBlock(I, B->getName() + ".no_phis");
+    phiNodes.insert(B);
   }
 
-
+  //Now that blocks are ready, set up the CFG graph for the function
+  //get all the nodes
   for(BasicBlock &B : function)
   {
-    nodes.push_back(CFGNode(B));
+    bool isPhiNode = phiNodes.find(&B) != phiNodes.end();
+    nodes.push_back(CFGNode(B, isPhiNode));
+  }
+
+  //get all the edges
+  for(BasicBlock &B : function)
+  {
+    CFGNode *thisNode = findNode(B);
     for(BasicBlock *to : successors(&B))
     {
-      edges.push_back(CFGEdge(B, *to));
+      CFGNode *toNode = findNode(*to);
+      thisNode->addSuccessor(toNode);
     }
   }
-  // if(function.getName() == "main") function.viewCFG();
+  doLiveAnalysis();
+}
+
+void CFGFunction::doLiveAnalysis()
+{
+  bool converged;
+  do
+  {
+    converged = true;
+    for(CFGNode &cfgNode : nodes)
+    {
+      bool changed = false;
+      errs() << "Block: " << cfgNode.getBlock().getName() << " in " << cfgNode.getIn().size() << " out " << cfgNode.getOut().size() << "\n";
+
+      //in[n] = (use[n]) union (out[n]-def[n])
+      //first insert the use[n]
+      changed = CFGCopyAllOperands(cfgNode.getIn(), cfgNode.getUse());
+      //then insert the (out[n]-def[n])
+      std::vector<CFGOperand> outDefDiff;
+      for(CFGOperand op_out : cfgNode.getOut())
+      {
+        //if element from out is not in def
+        if(cfgNode.getDef().find(op_out) == cfgNode.getDef().end())
+        {
+          //add it and update the changed flag accordingly
+          auto ret = cfgNode.getIn().insert(op_out);
+          changed |= ret.second;
+        }
+      }
+
+      //out[n] = union of in[s] for all successors s of n
+      for(CFGNode * s : cfgNode.getSuccessors())
+      {
+        for(CFGOperand op : s->getIn())
+        {
+          if((op.isFromPHI() && &cfgNode.getBlock() == op.getSourcePHIBlock()) //if this operand is used by a phi instruction and is form this block
+             || !op.isFromPHI()) // or it's not used by phi
+          {
+            //TODO not sure if this is needed
+            //but it removes the fact that the variable is from the phi node when it is propagating
+            CFGOperand op_clear = CFGOperand(op.getValue());
+            changed |= CFGAddToSet(cfgNode.getOut(), op_clear);
+          }
+        }
+      }
+
+      //check if they have changed
+      converged = !changed;
+    }
+    errs() << "Function not converged " << function.getName() << "\n";
+  } while(!converged);
 }
 
 void CFGFunction::dump()
@@ -73,12 +146,13 @@ void CFGFunction::dump()
   errs() << "There are " << nodes.size() << " nodes:\n";
   for(CFGNode node : nodes)
   {
-    errs() << "*" << node.getBlock().getName() << "\n";
+    if(node.getBlock().getName() != "entry") continue;
+    errs() << "* " << node.getBlock().getName() << "\n";
     errs() << node.getBlock() << "\n";
     errs() << "def: \n";
-    for(Value * v : node.getDef())
+    for(CFGOperand v : node.getDef())
     {
-      errs() << *v << "\n";
+      v.dump();
     }
     errs() << "use: \n";
     for(CFGOperand v : node.getUse())
@@ -86,16 +160,34 @@ void CFGFunction::dump()
       v.dump();
     }
     errs() << "\n";
-  }
+    errs() << "in: \n";
+    for(CFGOperand v : node.getIn())
+    {
+      v.dump();
+    }
+    errs() << "\n";
+    errs() << "out: \n";
+    for(CFGOperand v : node.getOut())
+    {
+      v.dump();
+    }
+    errs() << "\n";
 
-  errs() << "There are " << edges.size() << " edges:\n";
-  for(CFGEdge edge : edges)
-  {
-    errs() << "* from " << edge.getFrom().getName() << " to " << edge.getTo().getName() << "\n";
+    errs() << "This node has " << node.getSuccessors().size() << " edges to nodes:\n";
+    for(CFGNode * s : node.getSuccessors())
+    {
+      errs() << "\t* " << s->getBlock().getName() << "\n";
+    }
+    errs() << "\n";
   }
 }
 
 Function &CFGFunction::getFunction()
 {
   return function;
+}
+
+std::vector<CFGNode> &CFGFunction::getNodes()
+{
+  return nodes;
 }

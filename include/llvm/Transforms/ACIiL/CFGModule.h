@@ -17,6 +17,8 @@ public:
   CFGModule(Module &m, Function &ef);
   void dump();
   Module &getModule();
+  std::map<StringRef, CFGFunction> &getFunctions();
+  CFGFunction &getEntryFunction();
 private:
   void setUpCFGs();
   Module &module;
