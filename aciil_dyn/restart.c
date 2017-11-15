@@ -163,7 +163,14 @@ int64_t __aciil_restart_get_label()
       free(info_file_path);
       __aciil_restart_checkpoint_file_counter = 0;
       if(label >= 0
-        && __aciil_checkpoint_valid(num_variables)) return label;
+        && __aciil_checkpoint_valid(num_variables))
+      {
+        return label;
+      }
+      else
+      {
+        printf("Checkpoint invalid, trying an older version.\n");
+      }
     }
 
     if(most_recent_checkpoint < 0) continue;
