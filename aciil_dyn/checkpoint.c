@@ -41,7 +41,7 @@ void __aciil_checkpoint_setup()
   }
 }
 
-void __aciil_checkpoint_start(int64_t label_number)
+void __aciil_checkpoint_start(int64_t label_number, int64_t num_variables)
 {
   if(!__aciil_perform_checkpoint)
     return;
@@ -68,6 +68,7 @@ void __aciil_checkpoint_start(int64_t label_number)
   fp = fopen(file_path, "w");
   //first write the header
   fprintf(fp, "%"PRIi64"\n", label_number); //label number
+  fprintf(fp, "%"PRIi64"\n", num_variables); //label number
 
   fclose(fp);
   free(file_path);

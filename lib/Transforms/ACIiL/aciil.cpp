@@ -23,7 +23,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 
-#include <iterator> 
+#include <iterator>
 
 using namespace llvm;
 
@@ -208,6 +208,7 @@ namespace {
         {
           std::vector<Value*> args;
           args.push_back(ConstantInt::get(i64Type, label, true));
+          args.push_back(ConstantInt::get(i64Type, node->getIn().size(), true));
           builder.CreateCall(aciilCheckpointStart, args);
         }
         //for every live variable
