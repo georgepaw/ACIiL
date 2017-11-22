@@ -100,6 +100,31 @@ uint8_t __aciil_checkpoint_valid(int64_t num_variables)
     FILE *fp;
     fp = fopen(file, "r");
     if(!fp) return 0;
+    //read the header
+    int64_t size = 0;
+    char data[1];
+    if (fscanf(fp, "%"PRIi64"\n", &size) != 1) //read size
+    {
+      fclose(fp);
+      return 0;
+    }
+
+    //read the separator
+    if (fscanf(fp, "\n") != 0)
+    {
+      fclose(fp);
+      return 0;
+    }
+
+    //read the data
+    for(int64_t i = 0; i < ROUND_BITS_TO_BYTES(size); i++)
+    {
+      if (fscanf(fp, "%c", data) != 1) //read char at a time
+      {
+        fclose(fp);
+        return 0;
+      }
+    }
     fclose(fp);
   }
   return 1;
@@ -136,6 +161,7 @@ int64_t __aciil_restart_get_label()
       {
         return -1;
       }
+      printf("Checkpoint path is %s\n", __aciil_checkpoint_path);
 
       //open the info file which stores the info about the checkpoint
       FILE *fp;
@@ -145,6 +171,10 @@ int64_t __aciil_restart_get_label()
         continue;
       }
       fp = fopen(info_file_path, "r");
+      if(!fp)
+      {
+        continue;
+      }
       //read the header
       if (fscanf(fp, "%"PRIi64"\n", &label) != 1) //read the label number
       {
