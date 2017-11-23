@@ -106,3 +106,39 @@ CFGOperand * CFGNode::getLiveMapping(CFGOperand from)
   return &liveVariablesMap.find(from)->second;
 }
 
+void CFGNode::dump()
+{
+  errs() << "* " << getBlock().getName() << "\n";
+  errs() << getBlock() << "\n";
+  errs() << "def: \n";
+  for(CFGOperand v : getDef())
+  {
+    v.dump();
+  }
+  errs() << "use: \n";
+  for(CFGOperand v : getUse())
+  {
+    v.dump();
+  }
+  errs() << "\n";
+  errs() << "in: \n";
+  for(CFGOperand v : getIn())
+  {
+    v.dump();
+  }
+  errs() << "\n";
+  errs() << "out: \n";
+  for(CFGOperand v : getOut())
+  {
+    v.dump();
+  }
+  errs() << "\n";
+
+  errs() << "This node has " << getSuccessors().size() << " edges to nodes:\n";
+  for(CFGNode * s : getSuccessors())
+  {
+    errs() << "\t* " << s->getBlock().getName() << "\n";
+  }
+  errs() << "\n";
+}
+

@@ -5,7 +5,7 @@
 
 namespace llvm
 {
-bool CFGAddToSet(std::set<CFGOperand> &copyTo, CFGOperand &op)
+bool CFGAddToSet(std::set<CFGOperand> &copyTo, CFGOperand op)
 {
   return copyTo.insert(op).second;
 }

@@ -26,6 +26,7 @@ public:
   void addLiveMapping(CFGOperand from, CFGOperand to);
   bool isLive(CFGOperand in);
   CFGOperand * getLiveMapping(CFGOperand from);
+  void dump();
 private:
   bool phiNode;
   BasicBlock &block;

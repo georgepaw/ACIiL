@@ -103,10 +103,9 @@ void CFGFunction::doLiveAnalysis()
   do
   {
     converged = true;
+    bool changed = false;
     for(CFGNode &cfgNode : nodes)
     {
-      bool changed = false;
-
       //in[n] = (use[n]) union (out[n]-def[n])
       //first insert the use[n]
       changed = CFGCopyAllOperands(cfgNode.getIn(), cfgNode.getUse());
@@ -118,8 +117,7 @@ void CFGFunction::doLiveAnalysis()
         if(cfgNode.getDef().find(op_out) == cfgNode.getDef().end())
         {
           //add it and update the changed flag accordingly
-          auto ret = cfgNode.getIn().insert(op_out);
-          changed |= ret.second;
+          changed |= CFGAddToSet(cfgNode.getIn(), op_out);
         }
       }
 
@@ -138,9 +136,8 @@ void CFGFunction::doLiveAnalysis()
           }
         }
       }
-
       //check if they have changed
-      converged = !changed;
+      converged &= !changed;
     }
   } while(!converged);
 
@@ -159,39 +156,8 @@ void CFGFunction::dump()
   errs() << "There are " << nodes.size() << " nodes:\n";
   for(CFGNode node : nodes)
   {
-    if(node.getBlock().getName() != "entry") continue;
-    errs() << "* " << node.getBlock().getName() << "\n";
-    errs() << node.getBlock() << "\n";
-    errs() << "def: \n";
-    for(CFGOperand v : node.getDef())
-    {
-      v.dump();
-    }
-    errs() << "use: \n";
-    for(CFGOperand v : node.getUse())
-    {
-      v.dump();
-    }
-    errs() << "\n";
-    errs() << "in: \n";
-    for(CFGOperand v : node.getIn())
-    {
-      v.dump();
-    }
-    errs() << "\n";
-    errs() << "out: \n";
-    for(CFGOperand v : node.getOut())
-    {
-      v.dump();
-    }
-    errs() << "\n";
-
-    errs() << "This node has " << node.getSuccessors().size() << " edges to nodes:\n";
-    for(CFGNode * s : node.getSuccessors())
-    {
-      errs() << "\t* " << s->getBlock().getName() << "\n";
-    }
-    errs() << "\n";
+    // if(node.getBlock().getName() != "entry") continue;
+    node.dump();
   }
 }
 

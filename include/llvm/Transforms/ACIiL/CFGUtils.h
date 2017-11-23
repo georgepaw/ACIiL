@@ -13,7 +13,7 @@ namespace llvm
 class CFGOperand;
 
 //inserts the value into the set, returns true if the value was not in the set before
-bool CFGAddToSet(std::set<CFGOperand> &copyTo, CFGOperand &op);
+bool CFGAddToSet(std::set<CFGOperand> &copyTo, CFGOperand op);
 
 //returns true if copyTo set has changed
 bool CFGCopyAllOperands(std::set<CFGOperand> &copyTo, std::set<CFGOperand> &copyFrom);

@@ -11,8 +11,14 @@ int main(int argc, char const *argv[])
 	for(int i = 0; i < N; i++)
 	{
     c += a + b;
-    if(i % 10 == 0) printf("i is %d c is %lf\n", i, c);
+    if(i % 10 == 0) c += c;
 	}
+
+  for(int i = 0; i < N; i++)
+  {
+    b += c/a;
+    if(i % 10 == 0) c -= 10.;
+  }
 
 	printf("c is %lf\n", c);
 	return 0;
