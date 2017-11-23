@@ -20,15 +20,15 @@ void CFGModule::setUpCFGs()
 {
   for(Function &F : module)
   {
-    function_cfgs.insert(std::pair<StringRef, CFGFunction>(F.getName(), CFGFunction(F)));
+    functions.insert(std::pair<StringRef, CFGFunction>(F.getName(), CFGFunction(F)));
   }
 }
 
 void CFGModule::dump()
 {
   errs() << "\nCFG for Module " << module.getName() << "\n";
-  errs() << "There are " << function_cfgs.size() << " functions:\n";
-  for(std::pair<StringRef, CFGFunction> pair : function_cfgs)
+  errs() << "There are " << functions.size() << " functions:\n";
+  for(std::pair<StringRef, CFGFunction> pair : functions)
   {
     errs() << "* Function: " << pair.first;
     pair.second.dump();
@@ -43,10 +43,10 @@ Module &CFGModule::getModule()
 
 std::map<StringRef, CFGFunction> &CFGModule::getFunctions()
 {
-  return function_cfgs;
+  return functions;
 }
 
 CFGFunction &CFGModule::getEntryFunction()
 {
-  return function_cfgs.find(entryFunction.getName())->second;
+  return functions.find(entryFunction.getName())->second;
 }

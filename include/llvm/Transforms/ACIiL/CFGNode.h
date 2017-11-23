@@ -7,6 +7,7 @@
 #include "llvm/IR/Value.h"
 
 #include <set>
+#include <map>
 
 namespace llvm
 {
@@ -22,6 +23,9 @@ public:
   void addSuccessor(CFGNode *s);
   std::set<CFGNode*> &getSuccessors();
   bool isPhiNode();
+  void addLiveMapping(CFGOperand from, CFGOperand to);
+  bool isLive(CFGOperand in);
+  CFGOperand * getLiveMapping(CFGOperand from);
 private:
   bool phiNode;
   BasicBlock &block;
@@ -30,6 +34,7 @@ private:
   std::set<CFGOperand> def;
   std::set<CFGOperand> in;
   std::set<CFGOperand> out;
+  std::map<CFGOperand, CFGOperand> liveVariablesMap;
 };
 }
 

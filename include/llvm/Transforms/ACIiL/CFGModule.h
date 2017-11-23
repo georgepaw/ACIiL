@@ -23,7 +23,8 @@ private:
   void setUpCFGs();
   Module &module;
   Function &entryFunction;
-  std::map<StringRef, CFGFunction> function_cfgs;
+  //TODO This really needs replacing
+  std::map<StringRef, CFGFunction> functions;
 };
 
 }//namespace

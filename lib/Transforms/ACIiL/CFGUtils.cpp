@@ -7,9 +7,7 @@ namespace llvm
 {
 bool CFGAddToSet(std::set<CFGOperand> &copyTo, CFGOperand &op)
 {
-  //TODO should this really be auto?
-  auto ret = copyTo.insert(op);
-  return ret.second;
+  return copyTo.insert(op).second;
 }
 
 bool CFGCopyAllOperands(std::set<CFGOperand> &copyTo, std::set<CFGOperand> &copyFrom)

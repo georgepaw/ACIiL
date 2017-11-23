@@ -8,10 +8,8 @@
 
 using namespace llvm;
 
-CFGNode::CFGNode(BasicBlock &b, bool isPhiNode) : block(b)
+CFGNode::CFGNode(BasicBlock &b, bool isPhiNode) : phiNode(isPhiNode), block(b)
 {
-  phiNode = isPhiNode;
-
   for(BasicBlock::iterator end = --block.end(), start = --block.begin(); end != start; end--)
   {
     Instruction &inst = *end;
@@ -27,15 +25,13 @@ CFGNode::CFGNode(BasicBlock &b, bool isPhiNode) : block(b)
 
 
     //get uses
-    //TODO: dyn_cast does not work here and have to do it explicitly
-    if(isa<PHINode>(inst))
+    if(PHINode * phi = dyn_cast<PHINode>(&inst))
     {
       //if it's a phi instruction
-      PHINode &phi = cast<PHINode>(inst);
-      for(Use &u : phi.operands())
+      for(Use &u : phi->operands())
       {
         //at the momemnt assume if the operand is a result of instruction then it should be in use set
-        if(isa<Instruction>(u)) use.insert(CFGOperand(u, phi.getIncomingBlock(u)));
+        if(isa<Instruction>(u)) use.insert(CFGOperand(u, phi->getIncomingBlock(u)));
       }
     }
     else
@@ -90,3 +86,23 @@ bool CFGNode::isPhiNode()
 {
   return phiNode;
 }
+
+void CFGNode::addLiveMapping(CFGOperand from, CFGOperand to)
+{
+  std::map<CFGOperand, CFGOperand>::iterator it = liveVariablesMap.find(from);
+  if(it == liveVariablesMap.end())
+    liveVariablesMap.insert(std::make_pair(from, to));
+  else
+    it->second = to;
+}
+
+bool CFGNode::isLive(CFGOperand in)
+{
+  return liveVariablesMap.find(in) != liveVariablesMap.end();
+}
+
+CFGOperand * CFGNode::getLiveMapping(CFGOperand from)
+{
+  return &liveVariablesMap.find(from)->second;
+}
+

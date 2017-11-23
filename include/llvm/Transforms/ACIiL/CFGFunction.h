@@ -9,6 +9,7 @@
 
 #include <vector>
 #include <set>
+#include <map>
 
 namespace llvm
 {
@@ -19,10 +20,14 @@ public:
   void dump();
   Function &getFunction();
   std::vector<CFGNode> &getNodes();
+  CFGNode& addCheckpointNode(BasicBlock &b, uint64_t nodeForCRIndex);
+  CFGNode& addRestartNode(BasicBlock &b, uint64_t nodeForCRIndex);
+  CFGNode& addNoCREntryNode(BasicBlock &b);
+  CFGNode* findNodeByBasicBlock(BasicBlock &b);
 private:
+  void addNode(BasicBlock &b, bool isPhiNode);
   void setUpCFG();
   void doLiveAnalysis();
-  CFGNode* findNode(BasicBlock &b);
   Function &function;
   std::vector<CFGNode> nodes;
 };

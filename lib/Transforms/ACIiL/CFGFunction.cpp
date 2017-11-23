@@ -8,6 +8,7 @@
 #include "llvm/Transforms/ACIiL/CFGNode.h"
 #include "llvm/Transforms/ACIiL/CFGUtils.h"
 
+#include <vector>
 #include <set>
 #include <map>
 
@@ -18,7 +19,13 @@ CFGFunction::CFGFunction(Function & f) : function(f)
   setUpCFG();
 }
 
-CFGNode* CFGFunction::findNode(BasicBlock &b)
+void CFGFunction::addNode(BasicBlock &b, bool isPhiNode)
+{
+  nodes.push_back(CFGNode(b, isPhiNode));
+}
+
+//TODO this needs to be improved, should the data structure be e vector? Not really
+CFGNode* CFGFunction::findNodeByBasicBlock(BasicBlock &b)
 {
   for(CFGNode &node : nodes)
   {
@@ -74,16 +81,16 @@ void CFGFunction::setUpCFG()
   for(BasicBlock &B : function)
   {
     bool isPhiNode = phiNodes.find(&B) != phiNodes.end();
-    nodes.push_back(CFGNode(B, isPhiNode));
+    addNode(B, isPhiNode);
   }
 
   //get all the edges
   for(BasicBlock &B : function)
   {
-    CFGNode *thisNode = findNode(B);
+    CFGNode *thisNode = findNodeByBasicBlock(B);
     for(BasicBlock *to : successors(&B))
     {
-      CFGNode *toNode = findNode(*to);
+      CFGNode *toNode = findNodeByBasicBlock(*to);
       thisNode->addSuccessor(toNode);
     }
   }
@@ -99,7 +106,6 @@ void CFGFunction::doLiveAnalysis()
     for(CFGNode &cfgNode : nodes)
     {
       bool changed = false;
-      errs() << "Block: " << cfgNode.getBlock().getName() << " in " << cfgNode.getIn().size() << " out " << cfgNode.getOut().size() << "\n";
 
       //in[n] = (use[n]) union (out[n]-def[n])
       //first insert the use[n]
@@ -125,7 +131,7 @@ void CFGFunction::doLiveAnalysis()
           if((op.isFromPHI() && &cfgNode.getBlock() == op.getSourcePHIBlock()) //if this operand is used by a phi instruction and is form this block
              || !op.isFromPHI()) // or it's not used by phi
           {
-            //TODO not sure if this is needed
+            //not sure if this is needed
             //but it removes the fact that the variable is from the phi node when it is propagating
             CFGOperand op_clear = CFGOperand(op.getValue());
             changed |= CFGAddToSet(cfgNode.getOut(), op_clear);
@@ -136,8 +142,15 @@ void CFGFunction::doLiveAnalysis()
       //check if they have changed
       converged = !changed;
     }
-    errs() << "Function not converged " << function.getName() << "\n";
   } while(!converged);
+
+  //set up mappings for variables in nodes
+  for(CFGNode &cfgNode : nodes)
+    for(CFGOperand op : cfgNode.getIn())
+      cfgNode.addLiveMapping(op, op);
+  for(CFGNode &cfgNode : nodes)
+    for(CFGOperand op : cfgNode.getDef())
+      cfgNode.addLiveMapping(op, op);
 }
 
 void CFGFunction::dump()
@@ -190,4 +203,37 @@ Function &CFGFunction::getFunction()
 std::vector<CFGNode> &CFGFunction::getNodes()
 {
   return nodes;
+}
+
+CFGNode& CFGFunction::addCheckpointNode(BasicBlock &b, uint64_t nodeForCRIndex)
+{
+  //add the node
+  addNode(b, false);
+  //copy the in set
+  CFGCopyAllOperands(nodes.back().getIn(), nodes[nodeForCRIndex].getIn());
+  //set up the mapping
+  for(CFGOperand op : nodes[nodeForCRIndex].getIn())
+    nodes.back().addLiveMapping(op, op);
+  return nodes.back();
+}
+
+CFGNode& CFGFunction::addRestartNode(BasicBlock &b, uint64_t nodeForCRIndex)
+{
+  //add the node
+  addNode(b, false);
+  //nothing is live before the restart block so don't copy the in set
+  //set up the mapping
+  for(CFGOperand op : nodes[nodeForCRIndex].getIn())
+    nodes.back().addLiveMapping(op, op);
+  return nodes.back();
+}
+
+CFGNode& CFGFunction::addNoCREntryNode(BasicBlock &b)
+{
+  //add the node
+  addNode(b, false);
+  //set up the mapping for all variables that are *defined*
+  for(CFGOperand op : nodes.back().getDef())
+    nodes.back().addLiveMapping(op, op);
+  return nodes.back();
 }
