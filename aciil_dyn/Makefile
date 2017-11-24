@@ -1,11 +1,11 @@
-LLVM_BIN_ROOT ?= ../../llvm-dbg/bin/
+LLVM_BIN_ROOT ?= /Users/george/llvm6/llvm-dbg/bin/
 
 CC  = $(LLVM_BIN_ROOT)clang
 CXX = $(LLVM_BIN_ROOT)clang++
 
 CFLAGS=-flto -O2
-
-LDFLAGS=-lm -v
+ACIIL_LIB_PATH=$(shell pwd)/../lib
+LDFLAGS=-lm -v -mllvm -load -mllvm $(ACIIL_LIB_PATH)/libLLVMACIiL.so
 
 .PHONY: cr clean
 

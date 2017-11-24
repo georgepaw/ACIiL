@@ -382,18 +382,18 @@ namespace {
 
 char ACIiLPass::ID = 0;
 
-// static void registerACIiLPass(const PassManagerBuilder &,
-//                          legacy::PassManagerBase &PM) {
-//   PM.add(new ACIiLPass());
-// }
+static void registerACIiLPass(const PassManagerBuilder &,
+                         legacy::PassManagerBase &PM) {
+  PM.add(createACIiLLinkingPass());
+}
 
 ModulePass *llvm::createACIiLLinkingPass() {
   errs() <<"Adding ACIiLPass!\n";
   return new ACIiLPass();
 }
 
-// static RegisterStandardPasses
-//     register_pass_O(PassManagerBuilder::EP_OptimizerLast, registerACIiLPass);
+static RegisterStandardPasses
+    register_pass_O(PassManagerBuilder::EP_OptimizerLast, registerACIiLPass);
 
 // static RegisterStandardPasses
 //     register_pass_O0(PassManagerBuilder::EP_EnabledOnOptLevel0, registerACIiLPass);
