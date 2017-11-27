@@ -8,26 +8,56 @@
 #include <time.h>
 #include "cr.h"
 
+#define __ACIIL_DEFAULT_CHECKPOINT_INTERVAL 100
+
 char __aciil_base_path[1024];
 char __aciil_checkpoint_path[1024];
 int64_t __aciil_checkpoint_counter = 0;
 int64_t __aciil_argument_counter = 0;
 uint8_t __aciil_perform_checkpoint = 1;
+uint64_t __aciil_checkpoint_interval = __ACIIL_DEFAULT_CHECKPOINT_INTERVAL;
+uint8_t __aciil_checkpoint_skip = 1;
+uint64_t __aciil_next_checkpoint_time;
 
-void __aciil_checkpoint_setup()
+
+
+
+inline uint64_t get_time_in_ms()
 {
-  //get the current time in microseconds
   struct timespec tms;
   if (clock_gettime(CLOCK_REALTIME,&tms))
   {
       __aciil_perform_checkpoint = 0;
-      return;
+      return 0;
   }
-  int64_t micros = tms.tv_sec * 1000000;
-  micros += tms.tv_nsec/1000;
+  return tms.tv_sec * 1000000 + tms.tv_nsec/1000;
+}
+
+void __aciil_checkpoint_setup()
+{
+  //get the current time in microseconds
+  uint64_t micros = get_time_in_ms();
+  if(!__aciil_perform_checkpoint)
+    return;
+
+  //if there is an env var with the interval use that
+  const char* s = getenv("ACIIL_CHECKPOINT_INTERVAL");
+  if(s)
+  {
+    char * end;
+    uint64_t val = strtoull(s, &end, 10);
+    if(s != end)
+    {
+      __aciil_checkpoint_interval = val;
+    }
+  }
+  printf("*** ACIIL - checkpoint interval is %" PRIu64 "ms ***\n", __aciil_checkpoint_interval);
+
+  __aciil_next_checkpoint_time = micros + __aciil_checkpoint_interval;
+  __aciil_checkpoint_skip = 1;
 
   //set up the base path
-  sprintf(__aciil_base_path, ".aciil_chkpnt-%" PRIi64 "/", micros);
+  sprintf(__aciil_base_path, ".aciil_chkpnt-%" PRIu64 "/", micros);
 
   //create the directory,
   //if there are any problems, no checkpointing should be done
@@ -46,6 +76,19 @@ void __aciil_checkpoint_start(int64_t label_number, int64_t num_variables)
   if(!__aciil_perform_checkpoint)
     return;
 
+  //check if it's time to checkpoint
+  if(get_time_in_ms() < __aciil_next_checkpoint_time)
+  {
+    __aciil_checkpoint_skip = 1;
+    return;
+  }
+  else
+  {
+    __aciil_checkpoint_skip = 0;
+  }
+
+  printf("*** ACIIL - checkpoint start ***\n");
+
 
   //for every checkpoint create a directory that stores all the files
   sprintf(__aciil_checkpoint_path, "%s%" PRIi64 "/",
@@ -55,7 +98,7 @@ void __aciil_checkpoint_start(int64_t label_number, int64_t num_variables)
   if(stat(__aciil_checkpoint_path, &st) != -1 //check that it doesn't already exists
     || mkdir(__aciil_checkpoint_path, 0700) == -1)  //and that we can create it
   {
-    __aciil_perform_checkpoint = 0;
+    __aciil_checkpoint_skip = 1;
     printf("Could not create the checkpoint directory %s, checkpointing will not be performed\n", __aciil_checkpoint_path);
     return;
   }
@@ -76,7 +119,7 @@ void __aciil_checkpoint_start(int64_t label_number, int64_t num_variables)
 
 void __aciil_checkpoint_pointer(int64_t sizeBits, char * data)
 {
-  if(!__aciil_perform_checkpoint)
+  if(!__aciil_perform_checkpoint || __aciil_checkpoint_skip)
     return;
 
   //for the data passed in
@@ -86,7 +129,7 @@ void __aciil_checkpoint_pointer(int64_t sizeBits, char * data)
   char * file_path = __aciil_merge_char_arrays(__aciil_checkpoint_path, file_name);
   if(!file_path)
   {
-    __aciil_perform_checkpoint = 0;
+    __aciil_checkpoint_skip = 1;
     printf("Could not create the checkpoint directory %s, checkpointing will not be performed\n", __aciil_checkpoint_path);
   }
 
@@ -113,9 +156,9 @@ void __aciil_checkpoint_pointer(int64_t sizeBits, char * data)
 
 void __aciil_checkpoint_finish()
 {
-  if(!__aciil_perform_checkpoint)
-    return;
-
   __aciil_checkpoint_counter++;
-  __aciil_perform_checkpoint=1;
+
+  __aciil_next_checkpoint_time = get_time_in_ms() + __aciil_checkpoint_interval;
+
+  if(!__aciil_checkpoint_skip) printf("*** ACIIL - checkpoint finish ***\n");
 }

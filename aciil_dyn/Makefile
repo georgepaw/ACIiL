@@ -16,6 +16,8 @@ simple: simple.o
 
 simple2: simple2.o
 
+jacobi: jacobi.o
+
 %.bc: %.c
 	$(CC) -O3 -c -emit-llvm $<
 
