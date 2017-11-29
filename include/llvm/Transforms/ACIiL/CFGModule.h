@@ -17,7 +17,7 @@ public:
   CFGModule(Module &m, Function &ef);
   ~CFGModule();
   void dump();
-  Module &getModule();
+  Module &getLLVMModule();
   std::map<Function*, CFGFunction*> &getFunctions();
   CFGFunction &getEntryFunction();
 private:

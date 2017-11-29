@@ -14,19 +14,21 @@
 
 namespace llvm
 {
+class CFGModule;
 class CFGFunction
 {
 public:
-  CFGFunction(Function &f);
+  CFGFunction(Function &f, CFGModule &m);
   ~CFGFunction();
   void dump();
-  Function &getFunction();
+  Function &getLLVMFunction();
   std::vector<CFGNode*> &getNodes();
   CFGNode& addCheckpointNode(BasicBlock &b, CFGNode &nodeForCR);
   CFGNode& addRestartNode(BasicBlock &b, CFGNode &nodeForCR);
   CFGNode& addNoCREntryNode(BasicBlock &b);
   CFGNode* findNodeByBasicBlock(BasicBlock &b);
   ACIiLAllocaManager& getAllocManager();
+  CFGModule& getParentModule();
 private:
   void addNode(BasicBlock &b, bool isPhiNode);
   void setUpCFG();
@@ -34,6 +36,7 @@ private:
   Function &function;
   std::vector<CFGNode*> nodes;
   ACIiLAllocaManager am;
+  CFGModule &module;
 };
 
 }//namespace

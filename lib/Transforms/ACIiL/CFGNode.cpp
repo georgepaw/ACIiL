@@ -1,4 +1,5 @@
 #include "llvm/Transforms/ACIiL/CFGNode.h"
+#include "llvm/Transforms/ACIiL/CFGFunction.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
@@ -8,7 +9,7 @@
 
 using namespace llvm;
 
-CFGNode::CFGNode(BasicBlock &b, bool isPhiNode) : phiNode(isPhiNode), block(b)
+CFGNode::CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f) : phiNode(isPhiNode), block(b), function(f)
 {
   for(BasicBlock::iterator end = --block.end(), start = --block.begin(); end != start; end--)
   {
@@ -77,7 +78,7 @@ std::set<CFGOperand> &CFGNode::getOut()
   return out;
 }
 
-BasicBlock &CFGNode::getBlock()
+BasicBlock &CFGNode::getLLVMBasicBlock()
 {
   return block;
 }
@@ -106,10 +107,15 @@ CFGOperand * CFGNode::getLiveMapping(CFGOperand from)
   return &liveVariablesMap.find(from)->second;
 }
 
+CFGFunction &CFGNode::getParentFunction()
+{
+  return function;
+}
+
 void CFGNode::dump()
 {
-  errs() << "* " << getBlock().getName() << "\n";
-  errs() << getBlock() << "\n";
+  errs() << "* " << getLLVMBasicBlock().getName() << "\n";
+  errs() << getLLVMBasicBlock() << "\n";
   errs() << "def: \n";
   for(CFGOperand v : getDef())
   {
@@ -137,7 +143,7 @@ void CFGNode::dump()
   errs() << "This node has " << getSuccessors().size() << " edges to nodes:\n";
   for(CFGNode * s : getSuccessors())
   {
-    errs() << "\t* " << s->getBlock().getName() << "\n";
+    errs() << "\t* " << s->getLLVMBasicBlock().getName() << "\n";
   }
   errs() << "\n";
 }

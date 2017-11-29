@@ -1,4 +1,5 @@
 #include "llvm/Transforms/ACIiL/CFGFunction.h"
+#include "llvm/Transforms/ACIiL/CFGModule.h"
 #include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/BasicBlock.h"
@@ -15,7 +16,7 @@
 
 using namespace llvm;
 
-CFGFunction::CFGFunction(Function & f) : function(f), am(*this)
+CFGFunction::CFGFunction(Function & f, CFGModule &m) : function(f), am(*this), module(m)
 {
   setUpCFG();
 }
@@ -30,7 +31,7 @@ CFGFunction::~CFGFunction()
 
 void CFGFunction::addNode(BasicBlock &b, bool isPhiNode)
 {
-  nodes.push_back(new CFGNode(b, isPhiNode));
+  nodes.push_back(new CFGNode(b, isPhiNode, *this));
 }
 
 //TODO this needs to be improved, should the data structure be e vector? Not really
@@ -38,7 +39,7 @@ CFGNode* CFGFunction::findNodeByBasicBlock(BasicBlock &b)
 {
   for(CFGNode * node : nodes)
   {
-    if(&node->getBlock() == &b) return node;
+    if(&node->getLLVMBasicBlock() == &b) return node;
   }
   return NULL;
 }
@@ -135,7 +136,7 @@ void CFGFunction::doLiveAnalysis()
       {
         for(CFGOperand op : s->getIn())
         {
-          if((op.isFromPHI() && &cfgNode->getBlock() == op.getSourcePHIBlock()) //if this operand is used by a phi instruction and is form this block
+          if((op.isFromPHI() && &cfgNode->getLLVMBasicBlock() == op.getSourcePHIBlock()) //if this operand is used by a phi instruction and is form this block
              || !op.isFromPHI()) // or it's not used by phi
           {
             //not sure if this is needed
@@ -165,12 +166,12 @@ void CFGFunction::dump()
   errs() << "There are " << nodes.size() << " nodes:\n";
   for(CFGNode * node : nodes)
   {
-    // if(node.getBlock().getName() != "entry") continue;
+    // if(node.getLLVMBasicBlock().getName() != "entry") continue;
     node->dump();
   }
 }
 
-Function &CFGFunction::getFunction()
+Function &CFGFunction::getLLVMFunction()
 {
   return function;
 }
@@ -216,4 +217,9 @@ CFGNode& CFGFunction::addNoCREntryNode(BasicBlock &b)
 ACIiLAllocaManager& CFGFunction::getAllocManager()
 {
   return am;
+}
+
+CFGModule& CFGFunction::getParentModule()
+{
+  return module;
 }

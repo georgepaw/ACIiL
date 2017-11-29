@@ -28,7 +28,7 @@ void CFGModule::setUpCFGs()
 {
   for(Function &F : module)
   {
-    functions.insert(std::make_pair(&F, new CFGFunction(F)));
+    functions.insert(std::make_pair(&F, new CFGFunction(F, *this)));
   }
 }
 
@@ -44,7 +44,7 @@ void CFGModule::dump()
   errs() << "\n";
 }
 
-Module &CFGModule::getModule()
+Module &CFGModule::getLLVMModule()
 {
   return module;
 }

@@ -9,9 +9,6 @@
 
 namespace llvm
 {
-
-class CFGOperand;
-
 //inserts the value into the set, returns true if the value was not in the set before
 bool CFGAddToSet(std::set<CFGOperand> &copyTo, CFGOperand op);
 
@@ -20,6 +17,5 @@ bool CFGCopyAllOperands(std::set<CFGOperand> &copyTo, std::set<CFGOperand> &copy
 
 //does what CFGCopyAllOperands, but clears copyTo first
 void CFGClearAndCopyAllOperands(std::set<CFGOperand> &copyTo, std::set<CFGOperand> &copyFrom);
-
 }//namespace
 #endif

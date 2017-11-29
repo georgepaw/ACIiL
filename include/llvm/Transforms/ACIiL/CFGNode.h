@@ -11,11 +11,12 @@
 
 namespace llvm
 {
+class CFGFunction;
 class CFGNode
 {
 public:
-  CFGNode(BasicBlock &b, bool isPhiNode);
-  BasicBlock &getBlock();
+  CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f);
+  BasicBlock &getLLVMBasicBlock();
   std::set<CFGOperand> &getDef();
   std::set<CFGOperand> &getUse();
   std::set<CFGOperand> &getIn();
@@ -27,6 +28,7 @@ public:
   bool isLive(CFGOperand in);
   CFGOperand * getLiveMapping(CFGOperand from);
   void dump();
+  CFGFunction &getParentFunction();
 private:
   bool phiNode;
   BasicBlock &block;
@@ -36,6 +38,7 @@ private:
   std::set<CFGOperand> in;
   std::set<CFGOperand> out;
   std::map<CFGOperand, CFGOperand> liveVariablesMap;
+  CFGFunction &function;
 };
 }
 

@@ -27,7 +27,7 @@ AllocaInst * ACIiLAllocaManager::getAlloca(Type * type)
   {
     std::stringstream ss;
     ss << "alloca_mngr." << type->getScalarType()->getTypeID() << ".";
-    ai = new AllocaInst(type, 0, nullptr, ss.str(), &function.getFunction().getEntryBlock().front());
+    ai = new AllocaInst(type, 0, nullptr, ss.str(), &function.getLLVMFunction().getEntryBlock().front());
     allocas[type].insert(ai);
   }
   return ai;

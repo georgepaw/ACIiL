@@ -125,7 +125,7 @@ namespace {
         //don't checkpoint phiNodes
         if(cfgNode->isPhiNode()) continue;
         //don't do this for the entry block or the exit blocks
-        BasicBlock &B = cfgNode->getBlock();
+        BasicBlock &B = cfgNode->getLLVMBasicBlock();
         unsigned numSuccessors = std::distance(succ_begin(&B), succ_end(&B));
         unsigned numPredecessors = std::distance(pred_begin(&B), pred_end(&B));
         if(numSuccessors == 0 || numPredecessors == 0) continue;
@@ -161,9 +161,9 @@ namespace {
 
     CheckpointRestartBlocksInfo createCheckpointAndRestartBlocksForNode(CFGNode * node, CFGFunction &cfgFunction, CFGModule &cfgModule, int64_t labelNumber)
     {
-      BasicBlock &B = node->getBlock();
+      BasicBlock &B = node->getLLVMBasicBlock();
       //add a checkpoint block
-      BasicBlock * checkpointBlock = BasicBlock::Create(cfgModule.getModule().getContext(), B.getName() + ".checkpoint", &cfgFunction.getFunction());
+      BasicBlock * checkpointBlock = BasicBlock::Create(cfgModule.getLLVMModule().getContext(), B.getName() + ".checkpoint", &cfgFunction.getLLVMFunction());
       //make sure all predecessors of B now point at the checkpoint
       for(BasicBlock * p : predecessors(&B))
       {
@@ -179,7 +179,7 @@ namespace {
       BranchInst::Create(&B, checkpointBlock);
 
       //add a restart block
-      BasicBlock * restartBlock = BasicBlock::Create(cfgModule.getModule().getContext(), B.getName() + ".read_checkpoint", &cfgFunction.getFunction());
+      BasicBlock * restartBlock = BasicBlock::Create(cfgModule.getLLVMModule().getContext(), B.getName() + ".read_checkpoint", &cfgFunction.getLLVMFunction());
       //add a branch instruction from the end of the checkpoint block to the original block
       BranchInst::Create(&B, restartBlock);
 
@@ -193,8 +193,8 @@ namespace {
       //2. all phi nodes are updated with that new block
       //3. Function for checkpoint and restart and inserted into the entry block
       //4. a switch statment is used to either perform a restart or run the program form the beginning (the new entry block)
-      BasicBlock &entry = cfgFunction.getFunction().getEntryBlock();
-      BasicBlock * noCREntry = BasicBlock::Create(cfgModule.getModule().getContext(), "no_cr_entry", &cfgFunction.getFunction());
+      BasicBlock &entry = cfgFunction.getLLVMFunction().getEntryBlock();
+      BasicBlock * noCREntry = BasicBlock::Create(cfgModule.getLLVMModule().getContext(), "no_cr_entry", &cfgFunction.getLLVMFunction());
 
       //loop over all successor blocks and replace the basic block in phi nodes
       for (BasicBlock * Successor : successors(&entry)) {
@@ -222,7 +222,7 @@ namespace {
       SwitchInst * si = builder.CreateSwitch(ciGetLabel, noCREntry, checkpointAndRestartBlocks.size());
       for(CheckpointRestartBlocksInfo crbi : checkpointAndRestartBlocks)
       {
-        si->addCase(ConstantInt::get(cfgModule.getModule().getContext(), APInt(64, crbi.labelNumber, true)), &crbi.restartBlock);
+        si->addCase(ConstantInt::get(cfgModule.getLLVMModule().getContext(), APInt(64, crbi.labelNumber, true)), &crbi.restartBlock);
       }
 
       //add the noCREntry block into the CFG
@@ -232,11 +232,11 @@ namespace {
     void fillCheckpointAndRestartBlocksForNode(CheckpointRestartBlocksInfo &crbi, CFGFunction &cfgFunction, CFGModule &cfgModule)
     {
       //initilise data layout
-      DataLayout dataLayout(&cfgModule.getModule());
+      DataLayout dataLayout(&cfgModule.getLLVMModule());
       //create commonly used types
-      IntegerType *i64Type = IntegerType::getInt64Ty(cfgModule.getModule().getContext());
-      IntegerType *i32Type = IntegerType::getInt32Ty(cfgModule.getModule().getContext());
-      IntegerType *i8Type = IntegerType::getInt8Ty(cfgModule.getModule().getContext());
+      IntegerType *i64Type = IntegerType::getInt64Ty(cfgModule.getLLVMModule().getContext());
+      IntegerType *i32Type = IntegerType::getInt32Ty(cfgModule.getLLVMModule().getContext());
+      IntegerType *i8Type = IntegerType::getInt8Ty(cfgModule.getLLVMModule().getContext());
       Type *i8PType = PointerType::get(i8Type, /*address space*/0);
 
       IRBuilder<> builder(&crbi.checkpointBlock);
@@ -328,7 +328,7 @@ namespace {
         {
           bool phiExists = false;
           //first need to check if a phi already exists, in that case only the values need to be updated
-          for(PHINode &phi : node->getBlock().phis())
+          for(PHINode &phi : node->getLLVMBasicBlock().phis())
           {
             for(unsigned phiIdx = 0; phiIdx < phi.getNumIncomingValues(); phiIdx++)
             {
@@ -344,11 +344,11 @@ namespace {
           //otherwise if phi does not exist, need to create a new one
           //phi node for this live variable
           PHINode * phi = PHINode::Create(op.getValue()->getType(),
-                                          std::distance(pred_begin(&node->getBlock()), pred_end(&node->getBlock())),
-                                          op.getValue()->getName() + "." + node->getBlock().getName(),
-                                          &node->getBlock().front());
+                                          std::distance(pred_begin(&node->getLLVMBasicBlock()), pred_end(&node->getLLVMBasicBlock())),
+                                          op.getValue()->getName() + "." + node->getLLVMBasicBlock().getName(),
+                                          &node->getLLVMBasicBlock().front());
           //update the uses
-          for(Instruction &inst : node->getBlock())
+          for(Instruction &inst : node->getLLVMBasicBlock())
           {
             for(unsigned i = 0; i < inst.getNumOperands(); i++)
             {
@@ -358,7 +358,7 @@ namespace {
 
           //add the values that need to be updated with the mappings
           unsigned phiIdx = 0;
-          for(BasicBlock * pred : predecessors(&node->getBlock()))
+          for(BasicBlock * pred : predecessors(&node->getLLVMBasicBlock()))
           {
             phi->addIncoming(Constant::getNullValue(op.getValue()->getType()), pred);
             phisToUpdate.push_back(PHINodeMappingToUpdate(*phi, op, phiIdx++));
@@ -374,7 +374,7 @@ namespace {
         ptu.phi.setIncomingValue(ptu.phiIdx, pred->getLiveMapping(ptu.op)->getValue());
       }
 
-      cfgFunction.getFunction().viewCFG();
+      cfgFunction.getLLVMFunction().viewCFG();
     }
   };
 }
