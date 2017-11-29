@@ -202,6 +202,7 @@ int64_t __aciil_restart_get_label()
       if(label >= 0
         && __aciil_checkpoint_valid(num_variables))
       {
+        printf("*** ACIIL - Using checkpoint with label %"PRIi64" ***\n", label);
         return label;
       }
       else

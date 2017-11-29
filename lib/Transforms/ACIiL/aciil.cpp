@@ -34,12 +34,12 @@ namespace {
     ACIiLPass() : ModulePass(ID) {}
 
     struct CheckpointRestartBlocksInfo {
-      CFGNode * node;
+      CFGNode &node;
       BasicBlock &checkpointBlock;
       BasicBlock &restartBlock;
-      int64_t labelNumber;
-      CheckpointRestartBlocksInfo(CFGNode * n, BasicBlock &cBB, BasicBlock &rBB,
-        int64_t lN) : node(n), checkpointBlock(cBB), restartBlock(rBB), labelNumber(lN)
+      int64_t checkpointLabel;
+      CheckpointRestartBlocksInfo(CFGNode &n, BasicBlock &cBB, BasicBlock &rBB,
+        int64_t lN) : node(n), checkpointBlock(cBB), restartBlock(rBB), checkpointLabel(lN)
       {
       }
     };
@@ -110,16 +110,16 @@ namespace {
 
       //get the main cfg
       CFGFunction &cfgMain = cfgModule.getEntryFunction();
-      bool changed = addCheckpointsToFunction(cfgMain, cfgModule);
+      bool changed = addCheckpointsToFunction(cfgMain);
       return changed;
     }
 
-    bool addCheckpointsToFunction(CFGFunction &cfgFunction, CFGModule &cfgModule)
+    bool addCheckpointsToFunction(CFGFunction &cfgFunction)
     {
       std::vector<CheckpointRestartBlocksInfo> checkpointAndRestartBlocks;
       //insert the checkpoint and restart blocks
       //the blocks are empty at first, just with correct branching
-      int64_t nextLabel = 0;
+      int64_t nextCheckpointLabel = 0;
       for(CFGNode * cfgNode : cfgFunction.getNodes())
       {
         //don't checkpoint phiNodes
@@ -132,38 +132,40 @@ namespace {
         //skip a block if it has no live variables
         if(cfgNode->getIn().size() == 0) continue;
 
-        checkpointAndRestartBlocks.push_back(createCheckpointAndRestartBlocksForNode(cfgNode, cfgFunction, cfgModule, nextLabel++));
+        checkpointAndRestartBlocks.push_back(createCheckpointAndRestartBlocksForNode(cfgNode, nextCheckpointLabel++));
       }
 
       //if no checkpoints were inserted then just return now
       if(checkpointAndRestartBlocks.size() == 0) return true;
 
       //otherwise insert the restart function and add the branch instructions for a restart
-      insertRestartBlock(cfgFunction, cfgModule, checkpointAndRestartBlocks);
+      insertRestartBlock(cfgFunction, checkpointAndRestartBlocks);
 
       //insert the checkpoint and restart nodes into the CFG
       for(CheckpointRestartBlocksInfo crbi : checkpointAndRestartBlocks)
       {
-        cfgFunction.addCheckpointNode(crbi.checkpointBlock, *crbi.node);
-        cfgFunction.addRestartNode(crbi.restartBlock, *crbi.node);
+        cfgFunction.addCheckpointNode(crbi.checkpointBlock, crbi.node);
+        cfgFunction.addRestartNode(crbi.restartBlock, crbi.node);
       }
 
       //fill out the checkpoint and restart blocks
       for(CheckpointRestartBlocksInfo crbi : checkpointAndRestartBlocks)
       {
-        fillCheckpointAndRestartBlocksForNode(crbi, cfgFunction, cfgModule);
+        fillCheckpointAndRestartBlocksForNode(crbi);
       }
 
       //now need to fix dominanance
-      fixDominance(cfgFunction, cfgModule);
+      fixDominance(cfgFunction);
       return true;
     }
 
-    CheckpointRestartBlocksInfo createCheckpointAndRestartBlocksForNode(CFGNode * node, CFGFunction &cfgFunction, CFGModule &cfgModule, int64_t labelNumber)
+    CheckpointRestartBlocksInfo createCheckpointAndRestartBlocksForNode(CFGNode * node, int64_t checkpointLabel)
     {
       BasicBlock &B = node->getLLVMBasicBlock();
       //add a checkpoint block
-      BasicBlock * checkpointBlock = BasicBlock::Create(cfgModule.getLLVMModule().getContext(), B.getName() + ".checkpoint", &cfgFunction.getLLVMFunction());
+      BasicBlock * checkpointBlock = BasicBlock::Create(node->getParentFunction().getParentModule().getLLVMModule().getContext(),
+                                                        B.getName() + ".checkpoint",
+                                                        &node->getParentFunction().getLLVMFunction());
       //make sure all predecessors of B now point at the checkpoint
       for(BasicBlock * p : predecessors(&B))
       {
@@ -179,14 +181,16 @@ namespace {
       BranchInst::Create(&B, checkpointBlock);
 
       //add a restart block
-      BasicBlock * restartBlock = BasicBlock::Create(cfgModule.getLLVMModule().getContext(), B.getName() + ".read_checkpoint", &cfgFunction.getLLVMFunction());
+      BasicBlock * restartBlock = BasicBlock::Create(node->getParentFunction().getParentModule().getLLVMModule().getContext(),
+                                                     B.getName() + ".read_checkpoint",
+                                                     &node->getParentFunction().getLLVMFunction());
       //add a branch instruction from the end of the checkpoint block to the original block
       BranchInst::Create(&B, restartBlock);
 
-      return CheckpointRestartBlocksInfo(node, *checkpointBlock, *restartBlock, labelNumber);
+      return CheckpointRestartBlocksInfo(*node, *checkpointBlock, *restartBlock, checkpointLabel);
     }
 
-    void insertRestartBlock(CFGFunction &cfgFunction, CFGModule &cfgModule, std::vector<CheckpointRestartBlocksInfo> checkpointAndRestartBlocks)
+    void insertRestartBlock(CFGFunction &cfgFunction, std::vector<CheckpointRestartBlocksInfo> checkpointAndRestartBlocks)
     {
       //the entry block is transformed in the following way
       //1. all instructions from entry are copied to a new block
@@ -194,7 +198,9 @@ namespace {
       //3. Function for checkpoint and restart and inserted into the entry block
       //4. a switch statment is used to either perform a restart or run the program form the beginning (the new entry block)
       BasicBlock &entry = cfgFunction.getLLVMFunction().getEntryBlock();
-      BasicBlock * noCREntry = BasicBlock::Create(cfgModule.getLLVMModule().getContext(), "no_cr_entry", &cfgFunction.getLLVMFunction());
+      BasicBlock * noCREntry = BasicBlock::Create(cfgFunction.getParentModule().getLLVMModule().getContext(),
+                                                  "no_cr_entry",
+                                                  &cfgFunction.getLLVMFunction());
 
       //loop over all successor blocks and replace the basic block in phi nodes
       for (BasicBlock * Successor : successors(&entry)) {
@@ -222,21 +228,23 @@ namespace {
       SwitchInst * si = builder.CreateSwitch(ciGetLabel, noCREntry, checkpointAndRestartBlocks.size());
       for(CheckpointRestartBlocksInfo crbi : checkpointAndRestartBlocks)
       {
-        si->addCase(ConstantInt::get(cfgModule.getLLVMModule().getContext(), APInt(64, crbi.labelNumber, true)), &crbi.restartBlock);
+        si->addCase(ConstantInt::get(cfgFunction.getParentModule().getLLVMModule().getContext(),
+                                     APInt(64, crbi.checkpointLabel, true)),
+                    &crbi.restartBlock);
       }
 
       //add the noCREntry block into the CFG
       cfgFunction.addNoCREntryNode(*noCREntry);
     }
 
-    void fillCheckpointAndRestartBlocksForNode(CheckpointRestartBlocksInfo &crbi, CFGFunction &cfgFunction, CFGModule &cfgModule)
+    void fillCheckpointAndRestartBlocksForNode(CheckpointRestartBlocksInfo &crbi)
     {
       //initilise data layout
-      DataLayout dataLayout(&cfgModule.getLLVMModule());
+      DataLayout dataLayout(&crbi.node.getParentFunction().getParentModule().getLLVMModule());
       //create commonly used types
-      IntegerType *i64Type = IntegerType::getInt64Ty(cfgModule.getLLVMModule().getContext());
-      IntegerType *i32Type = IntegerType::getInt32Ty(cfgModule.getLLVMModule().getContext());
-      IntegerType *i8Type = IntegerType::getInt8Ty(cfgModule.getLLVMModule().getContext());
+      IntegerType *i64Type = IntegerType::getInt64Ty(crbi.node.getParentFunction().getParentModule().getLLVMModule().getContext());
+      IntegerType *i32Type = IntegerType::getInt32Ty(crbi.node.getParentFunction().getParentModule().getLLVMModule().getContext());
+      IntegerType *i8Type = IntegerType::getInt8Ty(crbi.node.getParentFunction().getParentModule().getLLVMModule().getContext());
       Type *i8PType = PointerType::get(i8Type, /*address space*/0);
 
       IRBuilder<> builder(&crbi.checkpointBlock);
@@ -247,18 +255,18 @@ namespace {
       //firstly call the start checkpoint function
       {
         std::vector<Value*> args;
-        args.push_back(ConstantInt::get(i64Type, crbi.labelNumber, true));
-        args.push_back(ConstantInt::get(i64Type, crbi.node->getIn().size(), true));
+        args.push_back(ConstantInt::get(i64Type, crbi.checkpointLabel, true));
+        args.push_back(ConstantInt::get(i64Type, crbi.node.getIn().size(), true));
         builder.CreateCall(aciilCheckpointStart, args);
       }
       //for every live variable
-      for(CFGOperand op : crbi.node->getIn())
+      for(CFGOperand op : crbi.node.getIn())
       {
         Value * v = op.getValue();
         if(v->getType()->isPtrOrPtrVectorTy()) continue;
 
         //First alloca an array with just one element
-        AllocaInst * ai = cfgFunction.getAllocManager().getAlloca(v->getType());
+        AllocaInst * ai = crbi.node.getParentFunction().getAllocManager().getAlloca(v->getType());
         //Then store the value in that alloca
         builder.CreateStore(v, ai);
         //bitcast it to bytes
@@ -268,7 +276,7 @@ namespace {
         checkpointArgs.push_back(ConstantInt::get(i64Type, numBits, false));
         checkpointArgs.push_back(bc);
         builder.CreateCall(aciilCheckpointPointer, checkpointArgs);
-        cfgFunction.getAllocManager().releaseAlloca(ai);
+        crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
       }
 
       //add a checkpoint clean up call at the end
@@ -280,7 +288,7 @@ namespace {
       //set up the restart block
       builder.SetInsertPoint(&crbi.restartBlock.front());
       //for every live variable
-      for(CFGOperand op : crbi.node->getIn())
+      for(CFGOperand op : crbi.node.getIn())
       {
         Value * v = op.getValue();
 
@@ -300,11 +308,11 @@ namespace {
         LoadInst * li = builder.CreateLoad(ai, v->getName() + ".restart");
 
         //add a phi instruction for this variable in the correct block
-        cfgFunction.findNodeByBasicBlock(crbi.restartBlock)->addLiveMapping(CFGOperand(v), CFGOperand(li));
+        crbi.node.getParentFunction().findNodeByBasicBlock(crbi.restartBlock)->addLiveMapping(CFGOperand(v), CFGOperand(li));
       }
     }
 
-    void fixDominance(CFGFunction &cfgFunction, CFGModule &cfgModule)
+    void fixDominance(CFGFunction &cfgFunction)
     {
       //struct used for dominance fixing
       struct PHINodeMappingToUpdate {
