@@ -35,6 +35,7 @@ BasicBlock * CFGOperand::getSourcePHIBlock()
 void CFGOperand::dump()
 {
   errs() << "Value: " << *value;
+  errs() << " type: " << *value->getType();
   if(fromPHI) errs() << " from " << sourcePHIBlock->getName();
   errs() << "\n";
 }

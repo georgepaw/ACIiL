@@ -19,10 +19,7 @@ uint64_t __aciil_checkpoint_interval = __ACIIL_DEFAULT_CHECKPOINT_INTERVAL;
 uint8_t __aciil_checkpoint_skip = 1;
 uint64_t __aciil_next_checkpoint_time;
 
-
-
-
-inline uint64_t get_time_in_ms()
+inline uint64_t __aciil_get_time_in_ms()
 {
   struct timespec tms;
   if (clock_gettime(CLOCK_REALTIME,&tms))
@@ -36,7 +33,7 @@ inline uint64_t get_time_in_ms()
 void __aciil_checkpoint_setup()
 {
   //get the current time in microseconds
-  uint64_t micros = get_time_in_ms();
+  uint64_t micros = __aciil_get_time_in_ms();
   if(!__aciil_perform_checkpoint)
     return;
 
@@ -77,7 +74,7 @@ void __aciil_checkpoint_start(int64_t label_number, int64_t num_variables)
     return;
 
   //check if it's time to checkpoint
-  if(get_time_in_ms() < __aciil_next_checkpoint_time)
+  if(__aciil_get_time_in_ms() < __aciil_next_checkpoint_time)
   {
     __aciil_checkpoint_skip = 1;
     return;
@@ -158,7 +155,7 @@ void __aciil_checkpoint_finish()
 {
   __aciil_checkpoint_counter++;
 
-  __aciil_next_checkpoint_time = get_time_in_ms() + __aciil_checkpoint_interval;
+  __aciil_next_checkpoint_time = __aciil_get_time_in_ms() + __aciil_checkpoint_interval;
 
   if(!__aciil_checkpoint_skip) printf("*** ACIIL - checkpoint finish ***\n");
 }

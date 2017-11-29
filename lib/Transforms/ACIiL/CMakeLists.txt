@@ -5,6 +5,7 @@ add_llvm_library(LLVMACIiL
   CFGOperand.cpp
   CFGNode.cpp
   CFGUtils.cpp
+  ACIiLAllocaManager.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms

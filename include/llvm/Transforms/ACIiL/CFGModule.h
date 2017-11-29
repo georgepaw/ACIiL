@@ -15,16 +15,16 @@ class CFGModule
 {
 public:
   CFGModule(Module &m, Function &ef);
+  ~CFGModule();
   void dump();
   Module &getModule();
-  std::map<StringRef, CFGFunction> &getFunctions();
+  std::map<Function*, CFGFunction*> &getFunctions();
   CFGFunction &getEntryFunction();
 private:
   void setUpCFGs();
   Module &module;
   Function &entryFunction;
-  //TODO This really needs replacing
-  std::map<StringRef, CFGFunction> functions;
+  std::map<Function*, CFGFunction*> functions;
 };
 
 }//namespace

@@ -1,4 +1,5 @@
 #include "llvm/Transforms/ACIiL/CFGFunction.h"
+#include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
@@ -14,22 +15,30 @@
 
 using namespace llvm;
 
-CFGFunction::CFGFunction(Function & f) : function(f)
+CFGFunction::CFGFunction(Function & f) : function(f), am(*this)
 {
   setUpCFG();
 }
 
+CFGFunction::~CFGFunction()
+{
+  for(CFGNode * node : nodes)
+  {
+    delete node;
+  }
+}
+
 void CFGFunction::addNode(BasicBlock &b, bool isPhiNode)
 {
-  nodes.push_back(CFGNode(b, isPhiNode));
+  nodes.push_back(new CFGNode(b, isPhiNode));
 }
 
 //TODO this needs to be improved, should the data structure be e vector? Not really
 CFGNode* CFGFunction::findNodeByBasicBlock(BasicBlock &b)
 {
-  for(CFGNode &node : nodes)
+  for(CFGNode * node : nodes)
   {
-    if(&node.getBlock() == &b) return &node;
+    if(&node->getBlock() == &b) return node;
   }
   return NULL;
 }
@@ -104,35 +113,35 @@ void CFGFunction::doLiveAnalysis()
   {
     converged = true;
     bool changed = false;
-    for(CFGNode &cfgNode : nodes)
+    for(CFGNode * cfgNode : nodes)
     {
       //in[n] = (use[n]) union (out[n]-def[n])
       //first insert the use[n]
-      changed = CFGCopyAllOperands(cfgNode.getIn(), cfgNode.getUse());
+      changed = CFGCopyAllOperands(cfgNode->getIn(), cfgNode->getUse());
       //then insert the (out[n]-def[n])
       std::vector<CFGOperand> outDefDiff;
-      for(CFGOperand op_out : cfgNode.getOut())
+      for(CFGOperand op_out : cfgNode->getOut())
       {
         //if element from out is not in def
-        if(cfgNode.getDef().find(op_out) == cfgNode.getDef().end())
+        if(cfgNode->getDef().find(op_out) == cfgNode->getDef().end())
         {
           //add it and update the changed flag accordingly
-          changed |= CFGAddToSet(cfgNode.getIn(), op_out);
+          changed |= CFGAddToSet(cfgNode->getIn(), op_out);
         }
       }
 
       //out[n] = union of in[s] for all successors s of n
-      for(CFGNode * s : cfgNode.getSuccessors())
+      for(CFGNode * s : cfgNode->getSuccessors())
       {
         for(CFGOperand op : s->getIn())
         {
-          if((op.isFromPHI() && &cfgNode.getBlock() == op.getSourcePHIBlock()) //if this operand is used by a phi instruction and is form this block
+          if((op.isFromPHI() && &cfgNode->getBlock() == op.getSourcePHIBlock()) //if this operand is used by a phi instruction and is form this block
              || !op.isFromPHI()) // or it's not used by phi
           {
             //not sure if this is needed
             //but it removes the fact that the variable is from the phi node when it is propagating
             CFGOperand op_clear = CFGOperand(op.getValue());
-            changed |= CFGAddToSet(cfgNode.getOut(), op_clear);
+            changed |= CFGAddToSet(cfgNode->getOut(), op_clear);
           }
         }
       }
@@ -142,22 +151,22 @@ void CFGFunction::doLiveAnalysis()
   } while(!converged);
 
   //set up mappings for variables in nodes
-  for(CFGNode &cfgNode : nodes)
-    for(CFGOperand op : cfgNode.getIn())
-      cfgNode.addLiveMapping(op, op);
-  for(CFGNode &cfgNode : nodes)
-    for(CFGOperand op : cfgNode.getDef())
-      cfgNode.addLiveMapping(op, op);
+  for(CFGNode * cfgNode : nodes)
+    for(CFGOperand op : cfgNode->getIn())
+      cfgNode->addLiveMapping(op, op);
+  for(CFGNode * cfgNode : nodes)
+    for(CFGOperand op : cfgNode->getDef())
+      cfgNode->addLiveMapping(op, op);
 }
 
 void CFGFunction::dump()
 {
   errs() << "\nCFG for function " << function.getName() << "\n";
   errs() << "There are " << nodes.size() << " nodes:\n";
-  for(CFGNode node : nodes)
+  for(CFGNode * node : nodes)
   {
     // if(node.getBlock().getName() != "entry") continue;
-    node.dump();
+    node->dump();
   }
 }
 
@@ -166,32 +175,32 @@ Function &CFGFunction::getFunction()
   return function;
 }
 
-std::vector<CFGNode> &CFGFunction::getNodes()
+std::vector<CFGNode*> &CFGFunction::getNodes()
 {
   return nodes;
 }
 
-CFGNode& CFGFunction::addCheckpointNode(BasicBlock &b, uint64_t nodeForCRIndex)
+CFGNode& CFGFunction::addCheckpointNode(BasicBlock &b, CFGNode &nodeForCR)
 {
   //add the node
   addNode(b, false);
   //copy the in set
-  CFGCopyAllOperands(nodes.back().getIn(), nodes[nodeForCRIndex].getIn());
+  CFGCopyAllOperands(nodes.back()->getIn(), nodeForCR.getIn());
   //set up the mapping
-  for(CFGOperand op : nodes[nodeForCRIndex].getIn())
-    nodes.back().addLiveMapping(op, op);
-  return nodes.back();
+  for(CFGOperand op : nodeForCR.getIn())
+    nodes.back()->addLiveMapping(op, op);
+  return *nodes.back();
 }
 
-CFGNode& CFGFunction::addRestartNode(BasicBlock &b, uint64_t nodeForCRIndex)
+CFGNode& CFGFunction::addRestartNode(BasicBlock &b, CFGNode &nodeForCR)
 {
   //add the node
   addNode(b, false);
   //nothing is live before the restart block so don't copy the in set
   //set up the mapping
-  for(CFGOperand op : nodes[nodeForCRIndex].getIn())
-    nodes.back().addLiveMapping(op, op);
-  return nodes.back();
+  for(CFGOperand op : nodeForCR.getIn())
+    nodes.back()->addLiveMapping(op, op);
+  return *nodes.back();
 }
 
 CFGNode& CFGFunction::addNoCREntryNode(BasicBlock &b)
@@ -199,7 +208,12 @@ CFGNode& CFGFunction::addNoCREntryNode(BasicBlock &b)
   //add the node
   addNode(b, false);
   //set up the mapping for all variables that are *defined*
-  for(CFGOperand op : nodes.back().getDef())
-    nodes.back().addLiveMapping(op, op);
-  return nodes.back();
+  for(CFGOperand op : nodes.back()->getDef())
+    nodes.back()->addLiveMapping(op, op);
+  return *nodes.back();
+}
+
+ACIiLAllocaManager& CFGFunction::getAllocManager()
+{
+  return am;
 }

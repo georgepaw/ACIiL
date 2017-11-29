@@ -3,7 +3,7 @@ LLVM_BIN_ROOT ?= ../../llvm-dbg/bin/
 CC  = $(LLVM_BIN_ROOT)clang
 CXX = $(LLVM_BIN_ROOT)clang++
 
-CFLAGS=-flto -O2
+CFLAGS=-flto -O3 -v
 
 LDFLAGS=-lm -v
 
@@ -16,6 +16,8 @@ simple: simple.o
 
 simple2: simple2.o
 
+vecadd: vecadd.o
+
 jacobi: jacobi.o
 
 %.bc: %.c
@@ -24,4 +26,4 @@ jacobi: jacobi.o
 cr: checkpoint.bc restart.bc
 
 clean:
-	rm *.bc simple.o simple.c
+	rm -rf .aciil_chkpnt-*

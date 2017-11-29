@@ -16,11 +16,19 @@ CFGModule::CFGModule(Module &m, Function &ef) : module(m), entryFunction(ef)
   setUpCFGs();
 }
 
+CFGModule::~CFGModule()
+{
+  for(std::pair<Function*, CFGFunction*> pair : functions)
+  {
+    delete pair.second;
+  }
+}
+
 void CFGModule::setUpCFGs()
 {
   for(Function &F : module)
   {
-    functions.insert(std::pair<StringRef, CFGFunction>(F.getName(), CFGFunction(F)));
+    functions.insert(std::make_pair(&F, new CFGFunction(F)));
   }
 }
 
@@ -28,10 +36,10 @@ void CFGModule::dump()
 {
   errs() << "\nCFG for Module " << module.getName() << "\n";
   errs() << "There are " << functions.size() << " functions:\n";
-  for(std::pair<StringRef, CFGFunction> pair : functions)
+  for(std::pair<Function*, CFGFunction*> pair : functions)
   {
-    errs() << "* Function: " << pair.first;
-    pair.second.dump();
+    errs() << "* Function: " << pair.first->getName();
+    pair.second->dump();
   }
   errs() << "\n";
 }
@@ -41,12 +49,12 @@ Module &CFGModule::getModule()
   return module;
 }
 
-std::map<StringRef, CFGFunction> &CFGModule::getFunctions()
+std::map<Function*, CFGFunction*> &CFGModule::getFunctions()
 {
   return functions;
 }
 
 CFGFunction &CFGModule::getEntryFunction()
 {
-  return functions.find(entryFunction.getName())->second;
+  return *functions.find(&entryFunction)->second;
 }
