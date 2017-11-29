@@ -5,7 +5,7 @@
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
-  ModulePass *createACIiLLinkingPass();
+ModulePass *createACIiLLinkingPass();
 }
 
 #endif

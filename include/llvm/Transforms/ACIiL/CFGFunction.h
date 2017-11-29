@@ -2,42 +2,41 @@
 #ifndef LLVM_TRANSFORMS_ACIIL_CFGFUNCTION_H
 #define LLVM_TRANSFORMS_ACIIL_CFGFUNCTION_H
 
-#include "llvm/Transforms/ACIiL/CFGNode.h"
-#include "llvm/IR/Function.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
+#include "llvm/Transforms/ACIiL/CFGNode.h"
 
-#include <vector>
-#include <set>
 #include <map>
+#include <set>
+#include <vector>
 
-namespace llvm
-{
+namespace llvm {
 class CFGModule;
-class CFGFunction
-{
+class CFGFunction {
 public:
   CFGFunction(Function &f, CFGModule &m);
   ~CFGFunction();
   void dump();
   Function &getLLVMFunction();
-  std::vector<CFGNode*> &getNodes();
-  CFGNode& addCheckpointNode(BasicBlock &b, CFGNode &nodeForCR);
-  CFGNode& addRestartNode(BasicBlock &b, CFGNode &nodeForCR);
-  CFGNode& addNoCREntryNode(BasicBlock &b);
-  CFGNode* findNodeByBasicBlock(BasicBlock &b);
-  ACIiLAllocaManager& getAllocManager();
-  CFGModule& getParentModule();
+  std::vector<CFGNode *> &getNodes();
+  CFGNode &addCheckpointNode(BasicBlock &b, CFGNode &nodeForCR);
+  CFGNode &addRestartNode(BasicBlock &b, CFGNode &nodeForCR);
+  CFGNode &addNoCREntryNode(BasicBlock &b);
+  CFGNode *findNodeByBasicBlock(BasicBlock &b);
+  ACIiLAllocaManager &getAllocManager();
+  CFGModule &getParentModule();
+
 private:
   void addNode(BasicBlock &b, bool isPhiNode);
   void setUpCFG();
   void doLiveAnalysis();
   Function &function;
-  std::vector<CFGNode*> nodes;
+  std::vector<CFGNode *> nodes;
   ACIiLAllocaManager am;
   CFGModule &module;
 };
 
-}//namespace
+} // namespace llvm
 #endif

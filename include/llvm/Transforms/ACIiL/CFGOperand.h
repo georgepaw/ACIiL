@@ -5,26 +5,22 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Value.h"
 
-namespace llvm
-{
-class CFGOperand
-{
+namespace llvm {
+class CFGOperand {
 public:
-  CFGOperand(Value * v);
-  CFGOperand(Value * v, BasicBlock * b);
-  Value * getValue();
+  CFGOperand(Value *v);
+  CFGOperand(Value *v, BasicBlock *b);
+  Value *getValue();
   bool isFromPHI();
-  BasicBlock * getSourcePHIBlock();
-  bool operator<(const CFGOperand& other) const
-  {
-    return value < other.value;
-  }
+  BasicBlock *getSourcePHIBlock();
+  bool operator<(const CFGOperand &other) const { return value < other.value; }
   void dump();
+
 private:
-  Value * value;
+  Value *value;
   bool fromPHI = false;
-  BasicBlock * sourcePHIBlock;
+  BasicBlock *sourcePHIBlock;
 };
-}
+} // namespace llvm
 
 #endif

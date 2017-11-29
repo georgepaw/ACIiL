@@ -1,42 +1,35 @@
 #include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
-#include "llvm/Transforms/ACIiL/CFGFunction.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/ACIiL/CFGFunction.h"
 
-#include <set>
 #include <map>
+#include <set>
 #include <sstream>
 
 using namespace llvm;
 
-ACIiLAllocaManager::ACIiLAllocaManager(CFGFunction &f) : function(f)
-{
-}
+ACIiLAllocaManager::ACIiLAllocaManager(CFGFunction &f) : function(f) {}
 
-AllocaInst * ACIiLAllocaManager::getAlloca(Type * type)
-{
-  AllocaInst * ai;
-  if(unusedAllocas[type].size() > 0)
-  {
+AllocaInst *ACIiLAllocaManager::getAlloca(Type *type) {
+  AllocaInst *ai;
+  if (unusedAllocas[type].size() > 0) {
     ai = *unusedAllocas[type].begin();
     unusedAllocas[type].erase(ai);
-  }
-  else
-  {
+  } else {
     std::stringstream ss;
     ss << "alloca_mngr." << type->getScalarType()->getTypeID() << ".";
-    ai = new AllocaInst(type, 0, nullptr, ss.str(), &function.getLLVMFunction().getEntryBlock().front());
+    ai = new AllocaInst(type, 0, nullptr, ss.str(),
+                        &function.getLLVMFunction().getEntryBlock().front());
     allocas[type].insert(ai);
   }
   return ai;
 }
 
-void ACIiLAllocaManager::releaseAlloca(AllocaInst * ai)
-{
-  if(allocas[ai->getAllocatedType()].count(ai))
-  {
+void ACIiLAllocaManager::releaseAlloca(AllocaInst *ai) {
+  if (allocas[ai->getAllocatedType()].count(ai)) {
     unusedAllocas[ai->getAllocatedType()].insert(ai);
   }
 }

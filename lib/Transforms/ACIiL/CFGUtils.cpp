@@ -3,26 +3,23 @@
 
 #include <set>
 
-namespace llvm
-{
-bool CFGAddToSet(std::set<CFGOperand> &copyTo, CFGOperand op)
-{
+namespace llvm {
+bool CFGAddToSet(std::set<CFGOperand> &copyTo, CFGOperand op) {
   return copyTo.insert(op).second;
 }
 
-bool CFGCopyAllOperands(std::set<CFGOperand> &copyTo, std::set<CFGOperand> &copyFrom)
-{
+bool CFGCopyAllOperands(std::set<CFGOperand> &copyTo,
+                        std::set<CFGOperand> &copyFrom) {
   bool changed = false;
-  for(CFGOperand op : copyFrom)
+  for (CFGOperand op : copyFrom)
     changed |= CFGAddToSet(copyTo, op);
   return changed;
-
 }
 
-void CFGClearAndCopyAllOperands(std::set<CFGOperand> &copyTo, std::set<CFGOperand> &copyFrom)
-{
+void CFGClearAndCopyAllOperands(std::set<CFGOperand> &copyTo,
+                                std::set<CFGOperand> &copyFrom) {
   copyTo.clear();
   CFGCopyAllOperands(copyTo, copyFrom);
 }
 
-}
+} // namespace llvm
