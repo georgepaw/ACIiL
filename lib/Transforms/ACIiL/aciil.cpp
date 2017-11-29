@@ -264,10 +264,6 @@ struct ACIiLPass : public ModulePass {
                                                        .getParentModule()
                                                        .getLLVMModule()
                                                        .getContext());
-    IntegerType *i32Type = IntegerType::getInt32Ty(crbi.node.getParentFunction()
-                                                       .getParentModule()
-                                                       .getLLVMModule()
-                                                       .getContext());
     IntegerType *i8Type = IntegerType::getInt8Ty(crbi.node.getParentFunction()
                                                      .getParentModule()
                                                      .getLLVMModule()
@@ -289,7 +285,7 @@ struct ACIiLPass : public ModulePass {
     // for every live variable
     for (CFGOperand op : crbi.node.getIn()) {
       Value *v = op.getValue();
-      if (v->getType()->isPtrOrPtrVectorTy())
+      if (isa<AllocaInst>(v))
         continue;
 
       // First alloca an array with just one element
@@ -319,11 +315,13 @@ struct ACIiLPass : public ModulePass {
     // for every live variable
     for (CFGOperand op : crbi.node.getIn()) {
       Value *v = op.getValue();
+      if (isa<AllocaInst>(v))
+        continue;
 
       // First alloca an array with just one element
-      AllocaInst *ai = builder.CreateAlloca(
-          v->getType(), llvm::ConstantInt::get(i32Type, 1, true), // array size
-          v->getName() + ".addr");
+      AllocaInst *ai =
+          crbi.node.getParentFunction().getAllocManager().getAlloca(
+              v->getType());
       // bitcast it to bytes
       Value *bc = builder.CreateBitCast(ai, i8PType, ai->getName() + ".i8");
       std::vector<Value *> restartArgs;
@@ -334,6 +332,7 @@ struct ACIiLPass : public ModulePass {
       builder.CreateCall(aciilRestartReadFromCheckpoint, restartArgs);
 
       LoadInst *li = builder.CreateLoad(ai, v->getName() + ".restart");
+      crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
 
       // add a phi instruction for this variable in the correct block
       crbi.node.getParentFunction()
