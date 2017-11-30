@@ -3,7 +3,7 @@ LLVM_BIN_ROOT ?= ../../llvm-dbg/bin/
 CC  = $(LLVM_BIN_ROOT)clang
 CXX = $(LLVM_BIN_ROOT)clang++
 
-CFLAGS=-flto -O3 -v
+CFLAGS=-flto -O3 -v -fno-vectorize
 
 LDFLAGS=-lm -v
 

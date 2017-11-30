@@ -114,6 +114,7 @@ struct ACIiLPass : public ModulePass {
   }
 
   bool addCheckpointsToFunction(CFGFunction &cfgFunction) {
+    // cfgFunction.getLLVMFunction().viewCFG();
     std::vector<CheckpointRestartBlocksInfo> checkpointAndRestartBlocks;
     // insert the checkpoint and restart blocks
     // the blocks are empty at first, just with correct branching
@@ -285,23 +286,38 @@ struct ACIiLPass : public ModulePass {
     // for every live variable
     for (CFGOperand op : crbi.node.getIn()) {
       Value *v = op.getValue();
-      if (isa<AllocaInst>(v))
-        continue;
 
-      // First alloca an array with just one element
-      AllocaInst *ai =
-          crbi.node.getParentFunction().getAllocManager().getAlloca(
-              v->getType());
-      // Then store the value in that alloca
-      builder.CreateStore(v, ai);
-      // bitcast it to bytes
+      AllocaInst *ai;
+      uint64_t numElements = 0;
+      uint64_t elementSizeBits = 0;
+      // if the live value is not a pointer, then store it in some memory
+      // TODO for now assume pointer is alloca
+      if ((ai = dyn_cast<AllocaInst>(v))) {
+        numElements = cast<ArrayType>(ai->getAllocatedType())->getNumElements();
+        elementSizeBits = dataLayout.getTypeSizeInBits(
+            cast<ArrayType>(ai->getAllocatedType())->getElementType());
+      } else {
+        // First alloca an array with just one element
+        ai = crbi.node.getParentFunction().getAllocManager().getAlloca(
+            v->getType());
+        // Then store the value in that alloca
+        builder.CreateStore(v, ai);
+        numElements = 1;
+        elementSizeBits = dataLayout.getTypeSizeInBits(v->getType());
+      }
+
+      // bitcast alloca to bytes
       Value *bc = builder.CreateBitCast(ai, i8PType, ai->getName() + ".i8");
+
       std::vector<Value *> checkpointArgs;
-      uint64_t numBits = dataLayout.getTypeSizeInBits(v->getType());
-      checkpointArgs.push_back(ConstantInt::get(i64Type, numBits, false));
+      checkpointArgs.push_back(
+          ConstantInt::get(i64Type, elementSizeBits, false));
+      checkpointArgs.push_back(ConstantInt::get(i64Type, numElements, false));
       checkpointArgs.push_back(bc);
       builder.CreateCall(aciilCheckpointPointer, checkpointArgs);
-      crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
+      if (!isa<AllocaInst>(v)) {
+        crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
+      }
     }
 
     // add a checkpoint clean up call at the end
@@ -315,29 +331,47 @@ struct ACIiLPass : public ModulePass {
     // for every live variable
     for (CFGOperand op : crbi.node.getIn()) {
       Value *v = op.getValue();
-      if (isa<AllocaInst>(v))
-        continue;
+      AllocaInst *ai;
+      uint64_t numElements = 0;
+      uint64_t elementSizeBits = 0;
+      if (AllocaInst *aiV = dyn_cast<AllocaInst>(v)) {
+        // if it's an alloca, then clone the allocating instruction
+        ai = cast<AllocaInst>(aiV->clone());
+        // and insert it
+        builder.Insert(ai);
+        numElements = cast<ArrayType>(ai->getAllocatedType())->getNumElements();
+        elementSizeBits = dataLayout.getTypeSizeInBits(
+            cast<ArrayType>(ai->getAllocatedType())->getElementType());
+      } else {
+        // otherwise if it is a scalar
+        // alloca an array with just one element
+        ai = crbi.node.getParentFunction().getAllocManager().getAlloca(
+            v->getType());
+        numElements = 1;
+        elementSizeBits = dataLayout.getTypeSizeInBits(v->getType());
+      }
 
-      // First alloca an array with just one element
-      AllocaInst *ai =
-          crbi.node.getParentFunction().getAllocManager().getAlloca(
-              v->getType());
       // bitcast it to bytes
       Value *bc = builder.CreateBitCast(ai, i8PType, ai->getName() + ".i8");
       std::vector<Value *> restartArgs;
-      uint64_t numBits = dataLayout.getTypeSizeInBits(v->getType());
-      restartArgs.push_back(ConstantInt::get(i64Type, numBits, false));
+      restartArgs.push_back(ConstantInt::get(i64Type, elementSizeBits, false));
+      restartArgs.push_back(ConstantInt::get(i64Type, numElements, false));
       restartArgs.push_back(bc);
       // call the load function with the correct address
       builder.CreateCall(aciilRestartReadFromCheckpoint, restartArgs);
 
-      LoadInst *li = builder.CreateLoad(ai, v->getName() + ".restart");
-      crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
-
-      // add a phi instruction for this variable in the correct block
+      Value *outValue;
+      if (isa<AllocaInst>(v)) {
+        outValue = ai;
+      } else {
+        LoadInst *li = builder.CreateLoad(ai, v->getName() + ".restart");
+        crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
+        outValue = li;
+      }
+      // update the mapping correctly
       crbi.node.getParentFunction()
           .findNodeByBasicBlock(crbi.restartBlock)
-          ->addLiveMapping(CFGOperand(v), CFGOperand(li));
+          ->addLiveMapping(CFGOperand(v), CFGOperand(outValue));
     }
   }
 
@@ -412,7 +446,7 @@ struct ACIiLPass : public ModulePass {
                                pred->getLiveMapping(ptu.op)->getValue());
     }
 
-    cfgFunction.getLLVMFunction().viewCFG();
+    // cfgFunction.getLLVMFunction().viewCFG();
   }
 };
 } // namespace

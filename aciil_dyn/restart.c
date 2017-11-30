@@ -96,10 +96,17 @@ uint8_t __aciil_checkpoint_valid(int64_t num_variables) {
     if (!fp)
       return 0;
     // read the header
-    int64_t size = 0;
+    uint64_t size = 0;
+    uint64_t numElements = 0;
     char newLine;
     if (fscanf(fp, "%" PRIi64 "%c", &size, &newLine) != 2 ||
         newLine != '\n') // read size
+    {
+      fclose(fp);
+      return 0;
+    }
+    if (fscanf(fp, "%" PRIi64 "%c", &numElements, &newLine) != 2 ||
+        newLine != '\n') // read num elements
     {
       fclose(fp);
       return 0;
@@ -112,7 +119,7 @@ uint8_t __aciil_checkpoint_valid(int64_t num_variables) {
     }
 
     // read the data
-    for (int64_t i = 0; i < ROUND_BITS_TO_BYTES(size); i++) {
+    for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(size) * numElements; i++) {
       char c;
       if (fscanf(fp, "%c", &c) != 1) // read char at a time
       {
@@ -208,19 +215,28 @@ int64_t __aciil_restart_get_label() {
   return -1;
 }
 
-void __aciil_restart_read_from_checkpoint(int64_t sizeBits, uint8_t *data) {
+void __aciil_restart_read_from_checkpoint(uint64_t sizeBits,
+                                          uint64_t numElements, uint8_t *data) {
   char file_name[1024];
   sprintf(file_name, "%" PRIi64, __aciil_restart_checkpoint_file_counter);
   char *file = __aciil_merge_char_arrays(__aciil_checkpoint_path, file_name);
   FILE *fp;
   fp = fopen(file, "r");
   // read the header
-  int64_t size = 0;
+  uint64_t sizeFromFile = 0;
+  uint64_t numElementsFromFile = 0;
   char newLine;
-  if (fscanf(fp, "%" PRIi64 "%c", &size, &newLine) != 2 ||
+  if (fscanf(fp, "%" PRIu64 "%c", &sizeFromFile, &newLine) != 2 ||
       newLine != '\n') // read size
   {
-    printf("Restart has failed - header - aborted.\n");
+    printf("Restart has failed - header(size) - aborted.\n");
+    fclose(fp);
+    exit(-1);
+  }
+  if (fscanf(fp, "%" PRIu64 "%c", &numElementsFromFile, &newLine) != 2 ||
+      newLine != '\n') // read num elements
+  {
+    printf("Restart has failed - header(numElements) - aborted.\n");
     fclose(fp);
     exit(-1);
   }
@@ -233,7 +249,7 @@ void __aciil_restart_read_from_checkpoint(int64_t sizeBits, uint8_t *data) {
   }
 
   // read the data
-  for (int64_t i = 0; i < ROUND_BITS_TO_BYTES(sizeBits); i++) {
+  for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(sizeBits) * numElements; i++) {
     if (fscanf(fp, "%c", &data[i]) != 1) // read char at a time
     {
       printf("Restart has failed - body - aborted.\n");

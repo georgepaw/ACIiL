@@ -111,7 +111,8 @@ void __aciil_checkpoint_start(int64_t label_number, int64_t num_variables) {
   free(file_path);
 }
 
-void __aciil_checkpoint_pointer(int64_t sizeBits, char *data) {
+void __aciil_checkpoint_pointer(uint64_t elementSizeBits, uint64_t numElements,
+                                char *data) {
   if (!__aciil_perform_checkpoint || __aciil_checkpoint_skip)
     return;
 
@@ -132,13 +133,15 @@ void __aciil_checkpoint_pointer(int64_t sizeBits, char *data) {
   FILE *fp;
   fp = fopen(file_path, "w");
   // first write the header
-  fprintf(fp, "%" PRIi64 "\n", sizeBits); // size in bits
+  fprintf(fp, "%" PRIu64 "\n", elementSizeBits); // size in bits
+  fprintf(fp, "%" PRIu64 "\n", numElements);     // num elements
 
   // write a separator
   fprintf(fp, "\n");
 
   // then dump the binary data (round to a byte size)
-  for (int64_t i = 0; i < ROUND_BITS_TO_BYTES(sizeBits); i++) {
+  for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(elementSizeBits) * numElements;
+       i++) {
     fprintf(fp, "%c", data[i]);
   }
   fprintf(fp, "\n");
