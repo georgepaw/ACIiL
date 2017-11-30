@@ -50,6 +50,11 @@ struct ACIiLPass : public ModulePass {
   Function *aciilRestartGetLabel;
   Function *aciilRestartReadFromCheckpoint;
 
+  // commonly used types
+  IntegerType *i64Type;
+  IntegerType *i8Type;
+  Type *i8PType;
+
   virtual bool runOnModule(Module &M) {
     errs() << "In module called: " << M.getName() << "!\n";
     Function *mainFunction = M.getFunction("main");
@@ -107,6 +112,11 @@ struct ACIiLPass : public ModulePass {
       return false;
     }
 
+    // set up before inserting checkpoints
+    i64Type = IntegerType::getInt64Ty(M.getContext());
+    i8Type = IntegerType::getInt8Ty(M.getContext());
+    i8PType = PointerType::get(i8Type, /*address space*/ 0);
+
     // get the main cfg
     CFGFunction &cfgMain = cfgModule.getEntryFunction();
     bool changed = addCheckpointsToFunction(cfgMain);
@@ -114,7 +124,8 @@ struct ACIiLPass : public ModulePass {
   }
 
   bool addCheckpointsToFunction(CFGFunction &cfgFunction) {
-    // cfgFunction.getLLVMFunction().viewCFG();
+
+    cfgFunction.getLLVMFunction().viewCFG();
     std::vector<CheckpointRestartBlocksInfo> checkpointAndRestartBlocks;
     // insert the checkpoint and restart blocks
     // the blocks are empty at first, just with correct branching
@@ -257,20 +268,6 @@ struct ACIiLPass : public ModulePass {
 
   void
   fillCheckpointAndRestartBlocksForNode(CheckpointRestartBlocksInfo &crbi) {
-    // initilise data layout
-    DataLayout dataLayout(
-        &crbi.node.getParentFunction().getParentModule().getLLVMModule());
-    // create commonly used types
-    IntegerType *i64Type = IntegerType::getInt64Ty(crbi.node.getParentFunction()
-                                                       .getParentModule()
-                                                       .getLLVMModule()
-                                                       .getContext());
-    IntegerType *i8Type = IntegerType::getInt8Ty(crbi.node.getParentFunction()
-                                                     .getParentModule()
-                                                     .getLLVMModule()
-                                                     .getContext());
-    Type *i8PType = PointerType::get(i8Type, /*address space*/ 0);
-
     IRBuilder<> builder(&crbi.checkpointBlock);
     // insert instructions before the branch
     builder.SetInsertPoint(&crbi.checkpointBlock.front());
@@ -285,39 +282,7 @@ struct ACIiLPass : public ModulePass {
     }
     // for every live variable
     for (CFGOperand op : crbi.node.getIn()) {
-      Value *v = op.getValue();
-
-      AllocaInst *ai;
-      uint64_t numElements = 0;
-      uint64_t elementSizeBits = 0;
-      // if the live value is not a pointer, then store it in some memory
-      // TODO for now assume pointer is alloca
-      if ((ai = dyn_cast<AllocaInst>(v))) {
-        numElements = cast<ArrayType>(ai->getAllocatedType())->getNumElements();
-        elementSizeBits = dataLayout.getTypeSizeInBits(
-            cast<ArrayType>(ai->getAllocatedType())->getElementType());
-      } else {
-        // First alloca an array with just one element
-        ai = crbi.node.getParentFunction().getAllocManager().getAlloca(
-            v->getType());
-        // Then store the value in that alloca
-        builder.CreateStore(v, ai);
-        numElements = 1;
-        elementSizeBits = dataLayout.getTypeSizeInBits(v->getType());
-      }
-
-      // bitcast alloca to bytes
-      Value *bc = builder.CreateBitCast(ai, i8PType, ai->getName() + ".i8");
-
-      std::vector<Value *> checkpointArgs;
-      checkpointArgs.push_back(
-          ConstantInt::get(i64Type, elementSizeBits, false));
-      checkpointArgs.push_back(ConstantInt::get(i64Type, numElements, false));
-      checkpointArgs.push_back(bc);
-      builder.CreateCall(aciilCheckpointPointer, checkpointArgs);
-      if (!isa<AllocaInst>(v)) {
-        crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
-      }
+      checkpointLiveValue(op, crbi, builder);
     }
 
     // add a checkpoint clean up call at the end
@@ -330,49 +295,155 @@ struct ACIiLPass : public ModulePass {
     builder.SetInsertPoint(&crbi.restartBlock.front());
     // for every live variable
     for (CFGOperand op : crbi.node.getIn()) {
-      Value *v = op.getValue();
-      AllocaInst *ai;
-      uint64_t numElements = 0;
-      uint64_t elementSizeBits = 0;
-      if (AllocaInst *aiV = dyn_cast<AllocaInst>(v)) {
-        // if it's an alloca, then clone the allocating instruction
-        ai = cast<AllocaInst>(aiV->clone());
-        // and insert it
-        builder.Insert(ai);
-        numElements = cast<ArrayType>(ai->getAllocatedType())->getNumElements();
-        elementSizeBits = dataLayout.getTypeSizeInBits(
-            cast<ArrayType>(ai->getAllocatedType())->getElementType());
-      } else {
-        // otherwise if it is a scalar
-        // alloca an array with just one element
-        ai = crbi.node.getParentFunction().getAllocManager().getAlloca(
-            v->getType());
-        numElements = 1;
-        elementSizeBits = dataLayout.getTypeSizeInBits(v->getType());
-      }
+      restoreLiveValue(op, crbi, builder);
+    }
+  }
 
-      // bitcast it to bytes
-      Value *bc = builder.CreateBitCast(ai, i8PType, ai->getName() + ".i8");
-      std::vector<Value *> restartArgs;
-      restartArgs.push_back(ConstantInt::get(i64Type, elementSizeBits, false));
-      restartArgs.push_back(ConstantInt::get(i64Type, numElements, false));
-      restartArgs.push_back(bc);
-      // call the load function with the correct address
-      builder.CreateCall(aciilRestartReadFromCheckpoint, restartArgs);
+  void checkpointLiveValue(CFGOperand &op, CheckpointRestartBlocksInfo &crbi,
+                           IRBuilder<> &builder) {
+    if (!isa<Instruction>(op.getValue())) {
+      errs() << "TODO can a live value not be an instruction?\n";
+      return;
+    }
+    Instruction *i = cast<Instruction>(op.getValue());
+    switch (i->getOpcode()) {
+    case Instruction::GetElementPtr: {
+      // if it's a getElementPtr instruction then skip
+      GetElementPtrInst *gep = cast<GetElementPtrInst>(i);
+      break;
+    }
+    case Instruction::Alloca: {
+      AllocaInst *ai = cast<AllocaInst>(i);
+      // if the live value is not a pointer, then store it in some memory
+      // TODO for now assume pointer is alloca
+      uint64_t numElements =
+          cast<ArrayType>(ai->getAllocatedType())->getNumElements();
+      uint64_t elementSizeBits =
+          crbi.node.getParentFunction()
+              .getParentModule()
+              .getLLVMModule()
+              .getDataLayout()
+              .getTypeSizeInBits(
+                  cast<ArrayType>(ai->getAllocatedType())->getElementType());
+      addCheckpointInstructionsToBlock(ai, numElements, elementSizeBits,
+                                       builder);
+      break;
+    }
+    default: {
+      // TODO for now assume it is a scalar type
+      // First alloca an array with just one element
+      AllocaInst *ai =
+          crbi.node.getParentFunction().getAllocManager().getAlloca(
+              op.getValue()->getType());
+      // Then store the value in that alloca
+      builder.CreateStore(op.getValue(), ai);
+      uint64_t numElements = 1;
+      uint64_t elementSizeBits =
+          crbi.node.getParentFunction()
+              .getParentModule()
+              .getLLVMModule()
+              .getDataLayout()
+              .getTypeSizeInBits(op.getValue()->getType());
+      addCheckpointInstructionsToBlock(ai, numElements, elementSizeBits,
+                                       builder);
+      crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
+    }
+    }
+  }
 
-      Value *outValue;
-      if (isa<AllocaInst>(v)) {
-        outValue = ai;
-      } else {
-        LoadInst *li = builder.CreateLoad(ai, v->getName() + ".restart");
-        crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
-        outValue = li;
-      }
-      // update the mapping correctly
+  void restoreLiveValue(CFGOperand &op, CheckpointRestartBlocksInfo &crbi,
+                        IRBuilder<> &builder) {
+    if (!isa<Instruction>(op.getValue())) {
+      errs() << "TODO can a live value not be an instruction?\n";
+      return;
+    }
+
+    Value *valueOutToUpdateInMapping = nullptr;
+    Instruction *i = cast<Instruction>(op.getValue());
+    switch (i->getOpcode()) {
+    case Instruction::GetElementPtr: {
+      // if it's a getElementPtr instruction then skip
+      GetElementPtrInst *gep = cast<GetElementPtrInst>(i);
+      break;
+    }
+    case Instruction::Alloca: {
+      AllocaInst *aiLive = cast<AllocaInst>(i);
+      // if it's an alloca, then clone the allocating instruction
+      AllocaInst *ai = cast<AllocaInst>(aiLive->clone());
+      // and insert it
+      builder.Insert(ai);
+      uint64_t numElements =
+          cast<ArrayType>(ai->getAllocatedType())->getNumElements();
+      uint64_t elementSizeBits =
+          crbi.node.getParentFunction()
+              .getParentModule()
+              .getLLVMModule()
+              .getDataLayout()
+              .getTypeSizeInBits(
+                  cast<ArrayType>(ai->getAllocatedType())->getElementType());
+      addRestoreInstructionsToBlock(ai, numElements, elementSizeBits, builder);
+      valueOutToUpdateInMapping = ai;
+      break;
+    }
+    default: {
+      // TODO for now assume it is a scalar type
+      // First alloca an array with just one element
+      AllocaInst *ai =
+          crbi.node.getParentFunction().getAllocManager().getAlloca(
+              op.getValue()->getType());
+      uint64_t numElements = 1;
+      uint64_t elementSizeBits =
+          crbi.node.getParentFunction()
+              .getParentModule()
+              .getLLVMModule()
+              .getDataLayout()
+              .getTypeSizeInBits(op.getValue()->getType());
+      addRestoreInstructionsToBlock(ai, numElements, elementSizeBits, builder);
+      LoadInst *li =
+          builder.CreateLoad(ai, op.getValue()->getName() + ".restart");
+      crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
+      valueOutToUpdateInMapping = li;
+    }
+    }
+
+    // update the mapping correctly
+    if (valueOutToUpdateInMapping)
       crbi.node.getParentFunction()
           .findNodeByBasicBlock(crbi.restartBlock)
-          ->addLiveMapping(CFGOperand(v), CFGOperand(outValue));
-    }
+          ->addLiveMapping(CFGOperand(op.getValue()),
+                           CFGOperand(valueOutToUpdateInMapping));
+  }
+
+  void addCheckpointInstructionsToBlock(Value *valueToCheckpoint,
+                                        uint64_t numElements,
+                                        uint64_t elementSizeBits,
+                                        IRBuilder<> &builder) {
+    errs() << "Num elements " << numElements << " element size "
+           << elementSizeBits << "\n";
+    // bitcast alloca to bytes
+    Value *bc = builder.CreateBitCast(valueToCheckpoint, i8PType,
+                                      valueToCheckpoint->getName() + ".i8");
+
+    std::vector<Value *> checkpointArgs;
+    checkpointArgs.push_back(ConstantInt::get(i64Type, elementSizeBits, false));
+    checkpointArgs.push_back(ConstantInt::get(i64Type, numElements, false));
+    checkpointArgs.push_back(bc);
+    builder.CreateCall(aciilCheckpointPointer, checkpointArgs);
+  }
+
+  void addRestoreInstructionsToBlock(Value *valueToRestore,
+                                     uint64_t numElements,
+                                     uint64_t elementSizeBits,
+                                     IRBuilder<> &builder) {
+    // bitcast it to bytes
+    Value *bc = builder.CreateBitCast(valueToRestore, i8PType,
+                                      valueToRestore->getName() + ".i8");
+    std::vector<Value *> restartArgs;
+    restartArgs.push_back(ConstantInt::get(i64Type, elementSizeBits, false));
+    restartArgs.push_back(ConstantInt::get(i64Type, numElements, false));
+    restartArgs.push_back(bc);
+    // call the load function with the correct address
+    builder.CreateCall(aciilRestartReadFromCheckpoint, restartArgs);
   }
 
   void fixDominance(CFGFunction &cfgFunction) {
@@ -446,7 +517,7 @@ struct ACIiLPass : public ModulePass {
                                pred->getLiveMapping(ptu.op)->getValue());
     }
 
-    // cfgFunction.getLLVMFunction().viewCFG();
+    cfgFunction.getLLVMFunction().viewCFG();
   }
 };
 } // namespace
