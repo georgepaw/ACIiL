@@ -24,6 +24,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <iterator>
+#include <set>
 
 using namespace llvm;
 
@@ -268,124 +269,121 @@ struct ACIiLPass : public ModulePass {
 
   void
   fillCheckpointAndRestartBlocksForNode(CheckpointRestartBlocksInfo &crbi) {
-    IRBuilder<> builder(&crbi.checkpointBlock);
+    IRBuilder<> builderCheckpointBlock(&crbi.checkpointBlock);
+    IRBuilder<> builderRestartBlock(&crbi.restartBlock);
     // insert instructions before the branch
-    builder.SetInsertPoint(&crbi.checkpointBlock.front());
+    builderCheckpointBlock.SetInsertPoint(&crbi.checkpointBlock.front());
+    builderRestartBlock.SetInsertPoint(&crbi.restartBlock.front());
 
+    std::set<CFGOperand> liveValuesAlreadyCheckpointed;
+    // note that some live values don't need to be checkpointed, only reassigned
+    // so can't use the size of liveValuesAlreadyCheckpointed
+    uint64_t numberOfValuesCheckpointed = 0;
+    // for every live variable
+    errs() << "Start checkpointing\n";
+    for (CFGOperand op : crbi.node.getIn()) {
+      checkpointRestoreLiveValue(
+          op, crbi, builderCheckpointBlock, builderRestartBlock,
+          liveValuesAlreadyCheckpointed, numberOfValuesCheckpointed);
+    }
+    errs() << "End checkpointing\n";
+
+    // add extra checkpoint calls
     // set up the checkpoint block
     // firstly call the start checkpoint function
     {
       std::vector<Value *> args;
       args.push_back(ConstantInt::get(i64Type, crbi.checkpointLabel, true));
-      args.push_back(ConstantInt::get(i64Type, crbi.node.getIn().size(), true));
-      builder.CreateCall(aciilCheckpointStart, args);
+      args.push_back(
+          ConstantInt::get(i64Type, numberOfValuesCheckpointed, true));
+      builderCheckpointBlock.SetInsertPoint(&crbi.checkpointBlock.front());
+      builderCheckpointBlock.CreateCall(aciilCheckpointStart, args);
     }
-    // for every live variable
-    for (CFGOperand op : crbi.node.getIn()) {
-      checkpointLiveValue(op, crbi, builder);
-    }
-
     // add a checkpoint clean up call at the end
     {
       std::vector<Value *> args;
-      builder.CreateCall(aciilCheckpointFinish, args);
-    }
-
-    // set up the restart block
-    builder.SetInsertPoint(&crbi.restartBlock.front());
-    // for every live variable
-    for (CFGOperand op : crbi.node.getIn()) {
-      restoreLiveValue(op, crbi, builder);
+      builderCheckpointBlock.SetInsertPoint(&crbi.checkpointBlock.back());
+      builderCheckpointBlock.CreateCall(aciilCheckpointFinish, args);
     }
   }
 
-  void checkpointLiveValue(CFGOperand &op, CheckpointRestartBlocksInfo &crbi,
-                           IRBuilder<> &builder) {
+  void checkpointRestoreLiveValue(
+      CFGOperand op, CheckpointRestartBlocksInfo &crbi,
+      IRBuilder<> &builderCheckpointBlock, IRBuilder<> &builderRestartBlock,
+      std::set<CFGOperand> &liveValuesAlreadyCheckpointed,
+      uint64_t &numberOfValuesCheckpointed) {
     if (!isa<Instruction>(op.getValue())) {
       errs() << "TODO can a live value not be an instruction?\n";
       return;
     }
-    Instruction *i = cast<Instruction>(op.getValue());
-    switch (i->getOpcode()) {
-    case Instruction::GetElementPtr: {
-      // if it's a getElementPtr instruction then skip
-      GetElementPtrInst *gep = cast<GetElementPtrInst>(i);
-      break;
-    }
-    case Instruction::Alloca: {
-      AllocaInst *ai = cast<AllocaInst>(i);
-      // if the live value is not a pointer, then store it in some memory
-      // TODO for now assume pointer is alloca
-      uint64_t numElements =
-          cast<ArrayType>(ai->getAllocatedType())->getNumElements();
-      uint64_t elementSizeBits =
-          crbi.node.getParentFunction()
-              .getParentModule()
-              .getLLVMModule()
-              .getDataLayout()
-              .getTypeSizeInBits(
-                  cast<ArrayType>(ai->getAllocatedType())->getElementType());
-      addCheckpointInstructionsToBlock(ai, numElements, elementSizeBits,
-                                       builder);
-      break;
-    }
-    default: {
-      // TODO for now assume it is a scalar type
-      // First alloca an array with just one element
-      AllocaInst *ai =
-          crbi.node.getParentFunction().getAllocManager().getAlloca(
-              op.getValue()->getType());
-      // Then store the value in that alloca
-      builder.CreateStore(op.getValue(), ai);
-      uint64_t numElements = 1;
-      uint64_t elementSizeBits =
-          crbi.node.getParentFunction()
-              .getParentModule()
-              .getLLVMModule()
-              .getDataLayout()
-              .getTypeSizeInBits(op.getValue()->getType());
-      addCheckpointInstructionsToBlock(ai, numElements, elementSizeBits,
-                                       builder);
-      crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
-    }
-    }
-  }
+    errs() << *op.getValue() << "\n";
 
-  void restoreLiveValue(CFGOperand &op, CheckpointRestartBlocksInfo &crbi,
-                        IRBuilder<> &builder) {
-    if (!isa<Instruction>(op.getValue())) {
-      errs() << "TODO can a live value not be an instruction?\n";
+    if (liveValuesAlreadyCheckpointed.find(op) !=
+        liveValuesAlreadyCheckpointed.end()) {
+      errs() << "Live value already checkpointed\n";
       return;
     }
 
     Value *valueOutToUpdateInMapping = nullptr;
+
     Instruction *i = cast<Instruction>(op.getValue());
     switch (i->getOpcode()) {
     case Instruction::GetElementPtr: {
       // if it's a getElementPtr instruction then skip
-      GetElementPtrInst *gep = cast<GetElementPtrInst>(i);
+      GetElementPtrInst *gepLive = cast<GetElementPtrInst>(i);
+      Value *pointer = gepLive->getPointerOperand();
+      // for GEP instruction need to checkpoint/restore the actual data
+      checkpointRestoreLiveValue(CFGOperand(pointer), crbi,
+                                 builderCheckpointBlock, builderRestartBlock,
+                                 liveValuesAlreadyCheckpointed,
+                                 numberOfValuesCheckpointed);
+      // checkpoint
+      // don't need to do anything as we are not checkpointing an address
+
+      // restore
+      // clone the GEP instruction into restore block
+      GetElementPtrInst *gepRestore = cast<GetElementPtrInst>(gepLive->clone());
+      builderRestartBlock.Insert(gepRestore);
+      // replace the pointer to the one created in the restart block
+      CFGOperand *restorePointer = crbi.node.getParentFunction()
+                                       .findNodeByBasicBlock(crbi.restartBlock)
+                                       ->getLiveMapping(CFGOperand(pointer));
+      unsigned opIdx = gepRestore->getPointerOperandIndex();
+      gepRestore->setOperand(opIdx, restorePointer->getValue());
+      valueOutToUpdateInMapping = gepRestore;
+
+      liveValuesAlreadyCheckpointed.insert(op);
       break;
     }
     case Instruction::Alloca: {
       AllocaInst *aiLive = cast<AllocaInst>(i);
-      // if it's an alloca, then clone the allocating instruction
-      AllocaInst *ai = cast<AllocaInst>(aiLive->clone());
-      // and insert it
-      builder.Insert(ai);
+      // TODO for now assume pointer is alloca
       uint64_t numElements =
-          cast<ArrayType>(ai->getAllocatedType())->getNumElements();
+          cast<ArrayType>(aiLive->getAllocatedType())->getNumElements();
       uint64_t elementSizeBits =
           crbi.node.getParentFunction()
               .getParentModule()
               .getLLVMModule()
               .getDataLayout()
-              .getTypeSizeInBits(
-                  cast<ArrayType>(ai->getAllocatedType())->getElementType());
-      addRestoreInstructionsToBlock(ai, numElements, elementSizeBits, builder);
-      valueOutToUpdateInMapping = ai;
+              .getTypeSizeInBits(cast<ArrayType>(aiLive->getAllocatedType())
+                                     ->getElementType());
+      // checkpoint
+      addCheckpointInstructionsToBlock(aiLive, numElements, elementSizeBits,
+                                       builderCheckpointBlock,
+                                       numberOfValuesCheckpointed);
+      // restore
+      // clone the allocating instruction into restore block
+      AllocaInst *aiRestore = cast<AllocaInst>(aiLive->clone());
+      builderRestartBlock.Insert(aiRestore);
+      addRestoreInstructionsToBlock(aiRestore, numElements, elementSizeBits,
+                                    builderRestartBlock);
+      valueOutToUpdateInMapping = aiRestore;
+
+      liveValuesAlreadyCheckpointed.insert(op);
       break;
     }
     default: {
+      // if the live value is not a pointer, then store it in some memory
       // TODO for now assume it is a scalar type
       // First alloca an array with just one element
       AllocaInst *ai =
@@ -398,11 +396,21 @@ struct ACIiLPass : public ModulePass {
               .getLLVMModule()
               .getDataLayout()
               .getTypeSizeInBits(op.getValue()->getType());
-      addRestoreInstructionsToBlock(ai, numElements, elementSizeBits, builder);
-      LoadInst *li =
-          builder.CreateLoad(ai, op.getValue()->getName() + ".restart");
+      // checkpoint
+      // store the value in that alloca
+      builderCheckpointBlock.CreateStore(op.getValue(), ai);
+      addCheckpointInstructionsToBlock(ai, numElements, elementSizeBits,
+                                       builderCheckpointBlock,
+                                       numberOfValuesCheckpointed);
+      // restore
+      addRestoreInstructionsToBlock(ai, numElements, elementSizeBits,
+                                    builderRestartBlock);
+      LoadInst *li = builderRestartBlock.CreateLoad(
+          ai, op.getValue()->getName() + ".restart");
       crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
       valueOutToUpdateInMapping = li;
+
+      liveValuesAlreadyCheckpointed.insert(op);
     }
     }
 
@@ -417,7 +425,8 @@ struct ACIiLPass : public ModulePass {
   void addCheckpointInstructionsToBlock(Value *valueToCheckpoint,
                                         uint64_t numElements,
                                         uint64_t elementSizeBits,
-                                        IRBuilder<> &builder) {
+                                        IRBuilder<> &builder,
+                                        uint64_t &numberOfValuesCheckpointed) {
     errs() << "Num elements " << numElements << " element size "
            << elementSizeBits << "\n";
     // bitcast alloca to bytes
@@ -429,6 +438,8 @@ struct ACIiLPass : public ModulePass {
     checkpointArgs.push_back(ConstantInt::get(i64Type, numElements, false));
     checkpointArgs.push_back(bc);
     builder.CreateCall(aciilCheckpointPointer, checkpointArgs);
+
+    numberOfValuesCheckpointed++;
   }
 
   void addRestoreInstructionsToBlock(Value *valueToRestore,

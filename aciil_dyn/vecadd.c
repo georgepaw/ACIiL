@@ -3,7 +3,7 @@
 #include <stdlib.h>
 
 int main(int argc, char const *argv[]) {
-  int N = 1000;
+  int N = 1003;
   int itterations = 30000;
   double a[N];
   double b[N];
