@@ -11,14 +11,14 @@ public:
   CFGOperand(Value *v);
   CFGOperand(Value *v, BasicBlock *b);
   Value *getValue();
-  bool isFromPHI();
+  bool isFromPHI() const;
   BasicBlock *getSourcePHIBlock();
   bool operator<(const CFGOperand &other) const { return value < other.value; }
   void dump();
 
 private:
   Value *value;
-  bool fromPHI = false;
+  bool fromPHI;
   BasicBlock *sourcePHIBlock;
 };
 } // namespace llvm

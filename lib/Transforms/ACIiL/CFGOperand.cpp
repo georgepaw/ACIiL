@@ -5,20 +5,14 @@
 
 using namespace llvm;
 
-CFGOperand::CFGOperand(Value *v) {
-  value = v;
-  fromPHI = false;
-  sourcePHIBlock = NULL;
-}
+CFGOperand::CFGOperand(Value *v)
+    : value(v), fromPHI(false), sourcePHIBlock(nullptr) {}
 
-CFGOperand::CFGOperand(Value *v, BasicBlock *b) {
-  value = v;
-  fromPHI = true;
-  sourcePHIBlock = b;
-}
+CFGOperand::CFGOperand(Value *v, BasicBlock *b)
+    : value(v), fromPHI(true), sourcePHIBlock(b) {}
 
 Value *CFGOperand::getValue() { return value; }
-bool CFGOperand::isFromPHI() { return fromPHI; }
+bool CFGOperand::isFromPHI() const { return fromPHI; }
 BasicBlock *CFGOperand::getSourcePHIBlock() { return sourcePHIBlock; }
 
 void CFGOperand::dump() {

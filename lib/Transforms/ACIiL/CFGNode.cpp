@@ -20,7 +20,9 @@ CFGNode::CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f)
 
       def.insert(CFGOperand(&inst));
       // since this is SSA, remove the definition from uses set
-      if (use.find(CFGOperand(&inst)) != use.end())
+      // as long the value is not from phi
+      std::set<CFGOperand>::iterator it = use.find(CFGOperand(&inst));
+      if (it != use.end() && !it->isFromPHI())
         use.erase(CFGOperand(&inst));
     }
 
