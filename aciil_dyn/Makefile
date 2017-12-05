@@ -18,6 +18,8 @@ simple2: simple2.o
 
 vecadd: vecadd.o
 
+vecadd_ptrswp: vecadd_ptrswp.o
+
 jacobi: jacobi.o
 
 %.bc: %.c

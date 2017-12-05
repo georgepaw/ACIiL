@@ -264,5 +264,7 @@ void __aciil_restart_read_from_checkpoint(uint64_t sizeBits,
   }
   fclose(fp);
   free(file);
+  printf("*** ACIIL - restored element %" PRIu64 " ***\n",
+         __aciil_restart_checkpoint_file_counter);
   __aciil_restart_checkpoint_file_counter++;
 }

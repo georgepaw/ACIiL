@@ -21,11 +21,12 @@ uint64_t __aciil_next_checkpoint_time;
 
 inline uint64_t __aciil_get_time_in_ms() {
   struct timespec tms;
-  if (clock_gettime(CLOCK_REALTIME, &tms)) {
+  if (clock_gettime(CLOCK_MONOTONIC, &tms)) {
     __aciil_perform_checkpoint = 0;
     return 0;
   }
-  return tms.tv_sec * 1000000 + tms.tv_nsec / 1000;
+  uint64_t micros = tms.tv_sec * 1000000 + tms.tv_nsec / 1000;
+  return micros;
 }
 
 void __aciil_checkpoint_setup() {
@@ -43,7 +44,7 @@ void __aciil_checkpoint_setup() {
       __aciil_checkpoint_interval = val;
     }
   }
-  printf("*** ACIIL - checkpoint interval is %" PRIu64 "ms ***\n",
+  printf("*** ACIIL - checkpoint interval is %" PRIu64 "micros ***\n",
          __aciil_checkpoint_interval);
 
   __aciil_next_checkpoint_time = micros + __aciil_checkpoint_interval;
@@ -154,9 +155,9 @@ void __aciil_checkpoint_pointer(uint64_t elementSizeBits, uint64_t numElements,
 void __aciil_checkpoint_finish() {
   __aciil_checkpoint_counter++;
 
-  __aciil_next_checkpoint_time =
-      __aciil_get_time_in_ms() + __aciil_checkpoint_interval;
-
-  if (!__aciil_checkpoint_skip)
+  if (!__aciil_checkpoint_skip) {
     printf("*** ACIIL - checkpoint finish ***\n");
+    __aciil_next_checkpoint_time =
+        __aciil_get_time_in_ms() + __aciil_checkpoint_interval;
+  }
 }
