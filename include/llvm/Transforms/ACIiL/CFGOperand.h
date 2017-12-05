@@ -20,6 +20,7 @@ private:
   Value *value;
   bool fromPHI;
   BasicBlock *sourcePHIBlock;
+  uint64_t numElements;
 };
 } // namespace llvm
 
