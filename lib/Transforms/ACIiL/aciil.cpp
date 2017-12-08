@@ -228,7 +228,7 @@ struct ACIiLPass : public ModulePass {
         cfgFunction.getParentModule().getLLVMModule().getContext(),
         "no_cr_entry", &cfgFunction.getLLVMFunction());
 
-    // loopq over all successor blocks and replace the basic block in phi nodes
+    // loop over all successor blocks and replace the basic block in phi nodes
     for (BasicBlock *Successor : successors(&entry)) {
       for (PHINode &PN : Successor->phis()) {
         int Idx = PN.getBasicBlockIndex(&entry);
@@ -483,19 +483,29 @@ struct ACIiLPass : public ModulePass {
     // struct used for dominance fixing
     struct PHINodeMappingToUpdate {
       PHINode &phi;    // phi to fix
-      Value *value;    // mappinf from
+      Value *value;    // mapping from
       unsigned phiIdx; // index of the phi value
       PHINodeMappingToUpdate(PHINode &p, Value *v, unsigned pI)
           : phi(p), value(v), phiIdx(pI) {}
+    };
+    struct PHINodeToRemove {
+      PHINode &phi;  // phi to remove
+      Value *value;  // mapping from
+      CFGNode &node; // node this phi is in
+      PHINodeToRemove(PHINode &p, Value *v, CFGNode &n)
+          : phi(p), value(v), node(n) {}
     };
 
     // Step 1.
     // If    a phi node with the live variable as a value already exists then
     // only schedule it for updating  Else  in each block, for each live
     // variable create a phi with a value from each of the predecessors
-    //      and update the mapping
-    //      and replace the uses of that variable with phi
+    // If a node with phi with the live variable as a value already exists then
+    // only schedule it for updating.
+    // Else in each block, for each live variable
+    //      create a phi with a value from each of the predecessors
     std::vector<PHINodeMappingToUpdate> phisToUpdate;
+    std::vector<PHINodeToRemove> phisToRemove;
     for (CFGNode *node : cfgFunction.getNodes()) {
       for (Value *value : node->getLiveValues()) {
         bool phiExists = false;
@@ -537,6 +547,10 @@ struct ACIiLPass : public ModulePass {
           phisToUpdate.push_back(PHINodeMappingToUpdate(*phi, value, phiIdx++));
         }
         node->addLiveMapping(value, phi);
+        // phis are only removed right at the end because then the dominance has
+        // been fixed
+        if (phi->getNumIncomingValues() == 1)
+          phisToRemove.push_back(PHINodeToRemove(*phi, value, *node));
       }
     }
     // Step 2.
@@ -546,6 +560,18 @@ struct ACIiLPass : public ModulePass {
       CFGNode *pred = cfgFunction.findNodeByBasicBlock(
           *ptu.phi.getIncomingBlock(ptu.phiIdx));
       ptu.phi.setIncomingValue(ptu.phiIdx, pred->getLiveMapping(ptu.value));
+    }
+
+    // Step 3.
+    // Clean up phi nodes which were created that have only one input
+    for (PHINodeToRemove ptr : phisToRemove) {
+      // first replace all the uses - this is safe because all the dominance has
+      // been fixed
+      Value *phiReplacment = ptr.phi.getIncomingValue(0);
+      ptr.phi.replaceAllUsesWith(phiReplacment);
+      ptr.phi.eraseFromParent();
+      // update the mapping
+      ptr.node.addLiveMapping(ptr.value, phiReplacment);
     }
 
     cfgFunction.getLLVMFunction().viewCFG();
