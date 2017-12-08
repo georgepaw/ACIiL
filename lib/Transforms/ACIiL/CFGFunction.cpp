@@ -104,14 +104,15 @@ void CFGFunction::doLiveAnalysis() {
     for (CFGNode *cfgNode : nodes) {
       // in[n] = (use[n]) union (out[n]-def[n])
       // first insert the use[n]
-      changed = CFGCopyAllOperands(cfgNode->getIn(), cfgNode->getUse());
+      changed =
+          CFGUtils::CFGCopyAllOperands(cfgNode->getIn(), cfgNode->getUse());
       // then insert the (out[n]-def[n])
       std::vector<CFGOperand> outDefDiff;
       for (CFGOperand op_out : cfgNode->getOut()) {
         // if element from out is not in def
         if (cfgNode->getDef().find(op_out) == cfgNode->getDef().end()) {
           // add it and update the changed flag accordingly
-          changed |= CFGAddToSet(cfgNode->getIn(), op_out);
+          changed |= CFGUtils::CFGAddToSet(cfgNode->getIn(), op_out);
         }
       }
 
@@ -128,7 +129,7 @@ void CFGFunction::doLiveAnalysis() {
             // but it removes the fact that the variable is from the phi node
             // when it is propagating
             CFGOperand op_clear = CFGOperand(op.getValue());
-            changed |= CFGAddToSet(cfgNode->getOut(), op_clear);
+            changed |= CFGUtils::CFGAddToSet(cfgNode->getOut(), op_clear);
           }
         }
       }
@@ -136,14 +137,15 @@ void CFGFunction::doLiveAnalysis() {
       converged &= !changed;
     }
   } while (!converged);
-
-  // set up mappings for variables in nodes
-  for (CFGNode *cfgNode : nodes)
-    for (CFGOperand op : cfgNode->getIn())
-      cfgNode->addLiveMapping(op, op);
-  for (CFGNode *cfgNode : nodes)
+  // set up the live sets for nodes and mappings
+  for (CFGNode *cfgNode : nodes) {
+    for (CFGOperand op : cfgNode->getIn()) {
+      cfgNode->getLiveValues().insert(op.getValue());
+      cfgNode->addLiveMapping(op.getValue(), op.getValue());
+    }
     for (CFGOperand op : cfgNode->getDef())
-      cfgNode->addLiveMapping(op, op);
+      cfgNode->addLiveMapping(op.getValue(), op.getValue());
+  }
 }
 
 void CFGFunction::dump() {
@@ -162,11 +164,11 @@ std::vector<CFGNode *> &CFGFunction::getNodes() { return nodes; }
 CFGNode &CFGFunction::addCheckpointNode(BasicBlock &b, CFGNode &nodeForCR) {
   // add the node
   addNode(b, false);
-  // copy the in set
-  CFGCopyAllOperands(nodes.back()->getIn(), nodeForCR.getIn());
-  // set up the mapping
-  for (CFGOperand op : nodeForCR.getIn())
-    nodes.back()->addLiveMapping(op, op);
+  // copy the live set and set up mapping
+  for (Value *v : nodeForCR.getLiveValues()) {
+    nodes.back()->getLiveValues().insert(v);
+    nodes.back()->addLiveMapping(v, v);
+  }
   return *nodes.back();
 }
 
@@ -175,7 +177,7 @@ CFGNode &CFGFunction::addRestartNode(BasicBlock &b, CFGNode &nodeForCR) {
   addNode(b, false);
   // nothing is live before the restart block so don't copy the in set
   // set up the mapping
-  for (CFGOperand op : nodeForCR.getIn())
+  for (Value *op : nodeForCR.getLiveValues())
     nodes.back()->addLiveMapping(op, op);
   return *nodes.back();
 }
@@ -185,7 +187,7 @@ CFGNode &CFGFunction::addNoCREntryNode(BasicBlock &b) {
   addNode(b, false);
   // set up the mapping for all variables that are *defined*
   for (CFGOperand op : nodes.back()->getDef())
-    nodes.back()->addLiveMapping(op, op);
+    nodes.back()->addLiveMapping(op.getValue(), op.getValue());
   return *nodes.back();
 }
 

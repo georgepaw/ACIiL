@@ -49,6 +49,8 @@ CFGNode::CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f)
 
 void CFGNode::addSuccessor(CFGNode *s) { successors.insert(s); }
 
+std::set<Value *> &CFGNode::getLiveValues() { return live; };
+
 std::set<CFGNode *> &CFGNode::getSuccessors() { return successors; }
 
 std::set<CFGOperand> &CFGNode::getDef() { return def; }
@@ -63,20 +65,16 @@ BasicBlock &CFGNode::getLLVMBasicBlock() { return block; }
 
 bool CFGNode::isPhiNode() { return phiNode; }
 
-void CFGNode::addLiveMapping(CFGOperand from, CFGOperand to) {
-  std::map<CFGOperand, CFGOperand>::iterator it = liveVariablesMap.find(from);
-  if (it == liveVariablesMap.end())
-    liveVariablesMap.insert(std::make_pair(from, to));
+void CFGNode::addLiveMapping(Value *from, Value *to) {
+  std::map<Value *, Value *>::iterator it = liveValuesMap.find(from);
+  if (it == liveValuesMap.end())
+    liveValuesMap.insert(std::make_pair(from, to));
   else
     it->second = to;
 }
 
-bool CFGNode::isLive(CFGOperand in) {
-  return liveVariablesMap.find(in) != liveVariablesMap.end();
-}
-
-CFGOperand *CFGNode::getLiveMapping(CFGOperand from) {
-  return &liveVariablesMap.find(from)->second;
+Value *CFGNode::getLiveMapping(Value *from) {
+  return liveValuesMap.find(from)->second;
 }
 
 CFGFunction &CFGNode::getParentFunction() { return function; }

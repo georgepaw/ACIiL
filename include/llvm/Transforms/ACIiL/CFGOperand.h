@@ -7,20 +7,24 @@
 
 namespace llvm {
 class CFGOperand {
-public:
   CFGOperand(Value *v);
   CFGOperand(Value *v, BasicBlock *b);
   Value *getValue();
   bool isFromPHI() const;
   BasicBlock *getSourcePHIBlock();
-  bool operator<(const CFGOperand &other) const { return value < other.value; }
   void dump();
-
-private:
   Value *value;
   bool fromPHI;
   BasicBlock *sourcePHIBlock;
   uint64_t numElements;
+
+  friend class CFGNode;
+  friend class CFGFunction;
+  friend class CFGUtils;
+
+public:
+  bool operator<(const CFGOperand &other) const { return value < other.value; }
+  CFGOperand() = delete;
 };
 } // namespace llvm
 

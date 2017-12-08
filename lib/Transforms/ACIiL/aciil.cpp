@@ -142,7 +142,7 @@ struct ACIiLPass : public ModulePass {
       if (numSuccessors == 0 || numPredecessors == 0)
         continue;
       // skip a block if it has no live variables
-      if (cfgNode->getIn().size() == 0)
+      if (cfgNode->getLiveValues().size() == 0)
         continue;
 
       checkpointAndRestartBlocks.push_back(
@@ -228,7 +228,7 @@ struct ACIiLPass : public ModulePass {
         cfgFunction.getParentModule().getLLVMModule().getContext(),
         "no_cr_entry", &cfgFunction.getLLVMFunction());
 
-    // loop over all successor blocks and replace the basic block in phi nodes
+    // loopq over all successor blocks and replace the basic block in phi nodes
     for (BasicBlock *Successor : successors(&entry)) {
       for (PHINode &PN : Successor->phis()) {
         int Idx = PN.getBasicBlockIndex(&entry);
@@ -275,15 +275,15 @@ struct ACIiLPass : public ModulePass {
     builderCheckpointBlock.SetInsertPoint(&crbi.checkpointBlock.front());
     builderRestartBlock.SetInsertPoint(&crbi.restartBlock.front());
 
-    std::set<CFGOperand> liveValuesAlreadyCheckpointed;
+    std::set<Value *> liveValuesAlreadyCheckpointed;
     // note that some live values don't need to be checkpointed, only reassigned
     // so can't use the size of liveValuesAlreadyCheckpointed
     uint64_t numberOfValuesCheckpointed = 0;
     // for every live variable
     errs() << "Start checkpointing\n";
-    for (CFGOperand op : crbi.node.getIn()) {
+    for (Value *value : crbi.node.getLiveValues()) {
       checkpointRestoreLiveValue(
-          op, crbi, builderCheckpointBlock, builderRestartBlock,
+          value, crbi, builderCheckpointBlock, builderRestartBlock,
           liveValuesAlreadyCheckpointed, numberOfValuesCheckpointed);
     }
     errs() << "End checkpointing\n";
@@ -307,18 +307,19 @@ struct ACIiLPass : public ModulePass {
     }
   }
 
-  void checkpointRestoreLiveValue(
-      CFGOperand op, CheckpointRestartBlocksInfo &crbi,
-      IRBuilder<> &builderCheckpointBlock, IRBuilder<> &builderRestartBlock,
-      std::set<CFGOperand> &liveValuesAlreadyCheckpointed,
-      uint64_t &numberOfValuesCheckpointed) {
-    if (!isa<Instruction>(op.getValue())) {
+  void
+  checkpointRestoreLiveValue(Value *value, CheckpointRestartBlocksInfo &crbi,
+                             IRBuilder<> &builderCheckpointBlock,
+                             IRBuilder<> &builderRestartBlock,
+                             std::set<Value *> &liveValuesAlreadyCheckpointed,
+                             uint64_t &numberOfValuesCheckpointed) {
+    if (!isa<Instruction>(value)) {
       errs() << "TODO can a live value not be an instruction?\n";
       return;
     }
-    op.dump();
+    value->dump();
 
-    if (liveValuesAlreadyCheckpointed.find(op) !=
+    if (liveValuesAlreadyCheckpointed.find(value) !=
         liveValuesAlreadyCheckpointed.end()) {
       errs() << "Live value already checkpointed\n";
       return;
@@ -326,7 +327,7 @@ struct ACIiLPass : public ModulePass {
 
     Value *valueOutToUpdateInMapping = nullptr;
 
-    Instruction *i = cast<Instruction>(op.getValue());
+    Instruction *i = cast<Instruction>(value);
 
     Type *ty = i->getType();
 
@@ -337,10 +338,9 @@ struct ACIiLPass : public ModulePass {
         GetElementPtrInst *gepLive = cast<GetElementPtrInst>(i);
         Value *pointer = gepLive->getPointerOperand();
         // for GEP instruction need to checkpoint/restore the actual data
-        checkpointRestoreLiveValue(CFGOperand(pointer), crbi,
-                                   builderCheckpointBlock, builderRestartBlock,
-                                   liveValuesAlreadyCheckpointed,
-                                   numberOfValuesCheckpointed);
+        checkpointRestoreLiveValue(
+            pointer, crbi, builderCheckpointBlock, builderRestartBlock,
+            liveValuesAlreadyCheckpointed, numberOfValuesCheckpointed);
         // checkpoint
         // don't need to do anything as we are not checkpointing an address
 
@@ -350,15 +350,14 @@ struct ACIiLPass : public ModulePass {
             cast<GetElementPtrInst>(gepLive->clone());
         builderRestartBlock.Insert(gepRestore);
         // replace the pointer to the one created in the restart block
-        CFGOperand *restorePointer =
-            crbi.node.getParentFunction()
-                .findNodeByBasicBlock(crbi.restartBlock)
-                ->getLiveMapping(CFGOperand(pointer));
+        Value *restorePointer = crbi.node.getParentFunction()
+                                    .findNodeByBasicBlock(crbi.restartBlock)
+                                    ->getLiveMapping(pointer);
         unsigned opIdx = gepRestore->getPointerOperandIndex();
-        gepRestore->setOperand(opIdx, restorePointer->getValue());
+        gepRestore->setOperand(opIdx, restorePointer);
         valueOutToUpdateInMapping = gepRestore;
 
-        liveValuesAlreadyCheckpointed.insert(op);
+        liveValuesAlreadyCheckpointed.insert(value);
         break;
       }
       case Instruction::Alloca: {
@@ -385,7 +384,7 @@ struct ACIiLPass : public ModulePass {
                                       builderRestartBlock);
         valueOutToUpdateInMapping = aiRestore;
 
-        liveValuesAlreadyCheckpointed.insert(op);
+        liveValuesAlreadyCheckpointed.insert(value);
         break;
       }
       default: {
@@ -394,13 +393,13 @@ struct ACIiLPass : public ModulePass {
         PointerType *pty = cast<PointerType>(ty);
         pty->getElementType()->dump();
         valueOutToUpdateInMapping = checkpointRestoreLiveValueScalar(
-            op, crbi, builderCheckpointBlock, builderRestartBlock,
+            value, crbi, builderCheckpointBlock, builderRestartBlock,
             liveValuesAlreadyCheckpointed, numberOfValuesCheckpointed);
       }
       }
     } else {
       valueOutToUpdateInMapping = checkpointRestoreLiveValueScalar(
-          op, crbi, builderCheckpointBlock, builderRestartBlock,
+          value, crbi, builderCheckpointBlock, builderRestartBlock,
           liveValuesAlreadyCheckpointed, numberOfValuesCheckpointed);
     }
 
@@ -408,14 +407,13 @@ struct ACIiLPass : public ModulePass {
     if (valueOutToUpdateInMapping)
       crbi.node.getParentFunction()
           .findNodeByBasicBlock(crbi.restartBlock)
-          ->addLiveMapping(CFGOperand(op.getValue()),
-                           CFGOperand(valueOutToUpdateInMapping));
+          ->addLiveMapping(value, valueOutToUpdateInMapping);
   }
 
   Value *checkpointRestoreLiveValueScalar(
-      CFGOperand op, CheckpointRestartBlocksInfo &crbi,
+      Value *value, CheckpointRestartBlocksInfo &crbi,
       IRBuilder<> &builderCheckpointBlock, IRBuilder<> &builderRestartBlock,
-      std::set<CFGOperand> &liveValuesAlreadyCheckpointed,
+      std::set<Value *> &liveValuesAlreadyCheckpointed,
       uint64_t &numberOfValuesCheckpointed) {
     // if the live value is not a pointer, then store it in some memory
 
@@ -423,26 +421,26 @@ struct ACIiLPass : public ModulePass {
 
     // First alloca an array with just one element
     AllocaInst *ai = crbi.node.getParentFunction().getAllocManager().getAlloca(
-        op.getValue()->getType());
+        value->getType());
     uint64_t numElements = 1;
     uint64_t elementSizeBits = crbi.node.getParentFunction()
                                    .getParentModule()
                                    .getLLVMModule()
                                    .getDataLayout()
-                                   .getTypeSizeInBits(op.getValue()->getType());
+                                   .getTypeSizeInBits(value->getType());
     // checkpoint
     // store the value in that alloca
-    builderCheckpointBlock.CreateStore(op.getValue(), ai);
+    builderCheckpointBlock.CreateStore(value, ai);
     addCheckpointInstructionsToBlock(ai, numElements, elementSizeBits,
                                      builderCheckpointBlock,
                                      numberOfValuesCheckpointed);
     // restore
     addRestoreInstructionsToBlock(ai, numElements, elementSizeBits,
                                   builderRestartBlock);
-    LoadInst *li = builderRestartBlock.CreateLoad(ai, op.getValue()->getName() +
-                                                          ".restart");
+    LoadInst *li =
+        builderRestartBlock.CreateLoad(ai, value->getName() + ".restart");
     crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
-    liveValuesAlreadyCheckpointed.insert(op);
+    liveValuesAlreadyCheckpointed.insert(value);
     return li;
   }
 
@@ -485,10 +483,10 @@ struct ACIiLPass : public ModulePass {
     // struct used for dominance fixing
     struct PHINodeMappingToUpdate {
       PHINode &phi;    // phi to fix
-      CFGOperand op;   // mappinf from
+      Value *value;    // mappinf from
       unsigned phiIdx; // index of the phi value
-      PHINodeMappingToUpdate(PHINode &p, CFGOperand o, unsigned pI)
-          : phi(p), op(o.getValue()), phiIdx(pI) {}
+      PHINodeMappingToUpdate(PHINode &p, Value *v, unsigned pI)
+          : phi(p), value(v), phiIdx(pI) {}
     };
 
     // Step 1.
@@ -499,15 +497,16 @@ struct ACIiLPass : public ModulePass {
     //      and replace the uses of that variable with phi
     std::vector<PHINodeMappingToUpdate> phisToUpdate;
     for (CFGNode *node : cfgFunction.getNodes()) {
-      for (CFGOperand op : node->getIn()) {
+      for (Value *value : node->getLiveValues()) {
         bool phiExists = false;
         // first need to check if a phi already exists, in that case only the
         // values need to be updated
         for (PHINode &phi : node->getLLVMBasicBlock().phis()) {
           for (unsigned phiIdx = 0; phiIdx < phi.getNumIncomingValues();
                phiIdx++) {
-            if (phi.getIncomingValue(phiIdx) == op.getValue()) {
-              phisToUpdate.push_back(PHINodeMappingToUpdate(phi, op, phiIdx));
+            if (phi.getIncomingValue(phiIdx) == value) {
+              phisToUpdate.push_back(
+                  PHINodeMappingToUpdate(phi, value, phiIdx));
               phiExists = true;
             }
           }
@@ -518,16 +517,15 @@ struct ACIiLPass : public ModulePass {
         // otherwise if phi does not exist, need to create a new one
         // phi node for this live variable
         PHINode *phi = PHINode::Create(
-            op.getValue()->getType(),
+            value->getType(),
             std::distance(pred_begin(&node->getLLVMBasicBlock()),
                           pred_end(&node->getLLVMBasicBlock())),
-            op.getValue()->getName() + "." +
-                node->getLLVMBasicBlock().getName(),
+            value->getName() + "." + node->getLLVMBasicBlock().getName(),
             &node->getLLVMBasicBlock().front());
         // update the uses
         for (Instruction &inst : node->getLLVMBasicBlock()) {
           for (unsigned i = 0; i < inst.getNumOperands(); i++) {
-            if (inst.getOperand(i) == op.getValue())
+            if (inst.getOperand(i) == value)
               inst.setOperand(i, phi);
           }
         }
@@ -535,11 +533,10 @@ struct ACIiLPass : public ModulePass {
         // add the values that need to be updated with the mappings
         unsigned phiIdx = 0;
         for (BasicBlock *pred : predecessors(&node->getLLVMBasicBlock())) {
-          phi->addIncoming(Constant::getNullValue(op.getValue()->getType()),
-                           pred);
-          phisToUpdate.push_back(PHINodeMappingToUpdate(*phi, op, phiIdx++));
+          phi->addIncoming(Constant::getNullValue(value->getType()), pred);
+          phisToUpdate.push_back(PHINodeMappingToUpdate(*phi, value, phiIdx++));
         }
-        node->addLiveMapping(op, CFGOperand(phi));
+        node->addLiveMapping(value, phi);
       }
     }
     // Step 2.
@@ -548,8 +545,7 @@ struct ACIiLPass : public ModulePass {
     for (PHINodeMappingToUpdate ptu : phisToUpdate) {
       CFGNode *pred = cfgFunction.findNodeByBasicBlock(
           *ptu.phi.getIncomingBlock(ptu.phiIdx));
-      ptu.phi.setIncomingValue(ptu.phiIdx,
-                               pred->getLiveMapping(ptu.op)->getValue());
+      ptu.phi.setIncomingValue(ptu.phiIdx, pred->getLiveMapping(ptu.value));
     }
 
     cfgFunction.getLLVMFunction().viewCFG();

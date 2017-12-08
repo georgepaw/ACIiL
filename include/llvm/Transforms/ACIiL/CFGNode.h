@@ -15,20 +15,20 @@ class CFGNode {
 public:
   CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f);
   BasicBlock &getLLVMBasicBlock();
-  std::set<CFGOperand> &getDef();
-  std::set<CFGOperand> &getUse();
-  std::set<CFGOperand> &getIn();
-  std::set<CFGOperand> &getOut();
+  std::set<Value *> &getLiveValues();
   void addSuccessor(CFGNode *s);
   std::set<CFGNode *> &getSuccessors();
   bool isPhiNode();
-  void addLiveMapping(CFGOperand from, CFGOperand to);
-  bool isLive(CFGOperand in);
-  CFGOperand *getLiveMapping(CFGOperand from);
+  void addLiveMapping(Value *from, Value *to);
+  Value *getLiveMapping(Value *from);
   void dump();
   CFGFunction &getParentFunction();
 
 private:
+  std::set<CFGOperand> &getIn();
+  std::set<CFGOperand> &getOut();
+  std::set<CFGOperand> &getDef();
+  std::set<CFGOperand> &getUse();
   bool phiNode;
   BasicBlock &block;
   std::set<CFGNode *> successors;
@@ -36,8 +36,11 @@ private:
   std::set<CFGOperand> def;
   std::set<CFGOperand> in;
   std::set<CFGOperand> out;
-  std::map<CFGOperand, CFGOperand> liveVariablesMap;
+  std::set<Value *> live;
+  std::map<Value *, Value *> liveValuesMap;
   CFGFunction &function;
+
+  friend class CFGFunction;
 };
 } // namespace llvm
 
