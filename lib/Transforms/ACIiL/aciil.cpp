@@ -179,13 +179,9 @@ struct ACIiLPass : public ModulePass {
                                           int64_t checkpointLabel) {
     BasicBlock &B = node->getLLVMBasicBlock();
     // add a checkpoint block
-    BasicBlock *checkpointBlock =
-        BasicBlock::Create(node->getParentFunction()
-                               .getParentModule()
-                               .getLLVMModule()
-                               .getContext(),
-                           B.getName() + ".checkpoint",
-                           &node->getParentFunction().getLLVMFunction());
+    BasicBlock *checkpointBlock = BasicBlock::Create(
+        node->getParentLLVMModule().getContext(), B.getName() + ".checkpoint",
+        &node->getParentLLVMFunction());
     // make sure all predecessors of B now point at the checkpoint
     for (BasicBlock *p : predecessors(&B)) {
       for (unsigned i = 0; i < p->getTerminator()->getNumSuccessors(); i++) {
@@ -199,13 +195,9 @@ struct ACIiLPass : public ModulePass {
     BranchInst::Create(&B, checkpointBlock);
 
     // add a restart block
-    BasicBlock *restartBlock =
-        BasicBlock::Create(node->getParentFunction()
-                               .getParentModule()
-                               .getLLVMModule()
-                               .getContext(),
-                           B.getName() + ".read_checkpoint",
-                           &node->getParentFunction().getLLVMFunction());
+    BasicBlock *restartBlock = BasicBlock::Create(
+        node->getParentLLVMModule().getContext(),
+        B.getName() + ".read_checkpoint", &node->getParentLLVMFunction());
     // add a branch instruction from the end of the checkpoint block to the
     // original block
     BranchInst::Create(&B, restartBlock);
@@ -224,9 +216,9 @@ struct ACIiLPass : public ModulePass {
     // 4. a switch statment is used to either perform a restart or run the
     // program form the beginning (the new entry block)
     BasicBlock &entry = cfgFunction.getLLVMFunction().getEntryBlock();
-    BasicBlock *noCREntry = BasicBlock::Create(
-        cfgFunction.getParentModule().getLLVMModule().getContext(),
-        "no_cr_entry", &cfgFunction.getLLVMFunction());
+    BasicBlock *noCREntry =
+        BasicBlock::Create(cfgFunction.getParentLLVMModule().getContext(),
+                           "no_cr_entry", &cfgFunction.getLLVMFunction());
 
     // loop over all successor blocks and replace the basic block in phi nodes
     for (BasicBlock *Successor : successors(&entry)) {
@@ -257,9 +249,8 @@ struct ACIiLPass : public ModulePass {
                                           checkpointAndRestartBlocks.size());
     for (CheckpointRestartBlocksInfo crbi : checkpointAndRestartBlocks) {
       si->addCase(
-          ConstantInt::get(
-              cfgFunction.getParentModule().getLLVMModule().getContext(),
-              APInt(64, crbi.checkpointLabel, true)),
+          ConstantInt::get(cfgFunction.getParentLLVMModule().getContext(),
+                           APInt(64, crbi.checkpointLabel, true)),
           &crbi.restartBlock);
     }
 
@@ -366,12 +357,8 @@ struct ACIiLPass : public ModulePass {
         uint64_t numElements =
             cast<ArrayType>(aiLive->getAllocatedType())->getNumElements();
         uint64_t elementSizeBits =
-            crbi.node.getParentFunction()
-                .getParentModule()
-                .getLLVMModule()
-                .getDataLayout()
-                .getTypeSizeInBits(cast<ArrayType>(aiLive->getAllocatedType())
-                                       ->getElementType());
+            crbi.node.getParentLLVMModule().getDataLayout().getTypeSizeInBits(
+                cast<ArrayType>(aiLive->getAllocatedType())->getElementType());
         // checkpoint
         addCheckpointInstructionsToBlock(aiLive, numElements, elementSizeBits,
                                          builderCheckpointBlock,
@@ -423,11 +410,9 @@ struct ACIiLPass : public ModulePass {
     AllocaInst *ai = crbi.node.getParentFunction().getAllocManager().getAlloca(
         value->getType());
     uint64_t numElements = 1;
-    uint64_t elementSizeBits = crbi.node.getParentFunction()
-                                   .getParentModule()
-                                   .getLLVMModule()
-                                   .getDataLayout()
-                                   .getTypeSizeInBits(value->getType());
+    uint64_t elementSizeBits =
+        crbi.node.getParentLLVMModule().getDataLayout().getTypeSizeInBits(
+            value->getType());
     // checkpoint
     // store the value in that alloca
     builderCheckpointBlock.CreateStore(value, ai);

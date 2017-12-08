@@ -3,6 +3,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/ACIiL/CFGFunction.h"
+#include "llvm/Transforms/ACIiL/CFGModule.h"
 #include "llvm/Transforms/ACIiL/CFGOperand.h"
 
 #include <set>
@@ -78,6 +79,16 @@ Value *CFGNode::getLiveMapping(Value *from) {
 }
 
 CFGFunction &CFGNode::getParentFunction() { return function; }
+
+Function &CFGNode::getParentLLVMFunction() {
+  return function.getLLVMFunction();
+}
+
+CFGModule &CFGNode::getParentModule() { return function.getParentModule(); }
+
+Module &CFGNode::getParentLLVMModule() {
+  return function.getParentLLVMModule();
+}
 
 void CFGNode::dump() {
   errs() << "* " << getLLVMBasicBlock().getName() << "\n";

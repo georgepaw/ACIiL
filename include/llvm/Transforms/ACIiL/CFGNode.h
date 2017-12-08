@@ -3,6 +3,8 @@
 #define LLVM_TRANSFORMS_ACIIL_CFGNODE_H
 
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Transforms/ACIiL/CFGOperand.h"
 
@@ -11,6 +13,7 @@
 
 namespace llvm {
 class CFGFunction;
+class CFGModule;
 class CFGNode {
 public:
   CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f);
@@ -23,6 +26,9 @@ public:
   Value *getLiveMapping(Value *from);
   void dump();
   CFGFunction &getParentFunction();
+  Function &getParentLLVMFunction();
+  CFGModule &getParentModule();
+  Module &getParentLLVMModule();
 
 private:
   std::set<CFGOperand> &getIn();

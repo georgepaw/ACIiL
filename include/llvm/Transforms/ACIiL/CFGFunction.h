@@ -4,6 +4,7 @@
 
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
 #include "llvm/Transforms/ACIiL/CFGNode.h"
@@ -27,6 +28,7 @@ public:
   CFGNode *findNodeByBasicBlock(BasicBlock &b);
   ACIiLAllocaManager &getAllocManager();
   CFGModule &getParentModule();
+  Module &getParentLLVMModule();
 
 private:
   void addNode(BasicBlock &b, bool isPhiNode);

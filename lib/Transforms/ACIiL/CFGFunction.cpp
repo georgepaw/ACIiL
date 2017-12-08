@@ -194,3 +194,5 @@ CFGNode &CFGFunction::addNoCREntryNode(BasicBlock &b) {
 ACIiLAllocaManager &CFGFunction::getAllocManager() { return am; }
 
 CFGModule &CFGFunction::getParentModule() { return module; }
+
+Module &CFGFunction::getParentLLVMModule() { return module.getLLVMModule(); }
