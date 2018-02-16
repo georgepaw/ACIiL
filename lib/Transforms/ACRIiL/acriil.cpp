@@ -167,6 +167,10 @@ struct ACRIiLPass : public ModulePass {
         continue;
       if (numPredecessors != 1)
         continue;
+      // Simple heuristic -
+      // skip block if it's single predecessor was not a PHI node
+      // this will make sure one checkpoint per loop
+      // TODO change this
       if (!cfgFunction
                .findNodeByBasicBlock(
                    *cfgNode->getLLVMBasicBlock().getSinglePredecessor())
