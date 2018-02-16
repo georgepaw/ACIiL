@@ -3,13 +3,13 @@ LLVM_BIN_ROOT ?= ../../llvm-dbg/bin/
 CC  = $(LLVM_BIN_ROOT)clang
 CXX = $(LLVM_BIN_ROOT)clang++
 
-CFLAGS=-flto -O3 -v 
+CFLAGS=-flto -O3 -v
 
 LDFLAGS=-lm -v
 
 .PHONY: cr clean
 
-%.o: %.c
+%.o: %.c cr
 	$(CC) $(CFLAGS) -o $@ -c $<
 
 simple: simple.o

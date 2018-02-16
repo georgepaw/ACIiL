@@ -4,27 +4,46 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/ACIiL/CFGFunction.h"
 #include "llvm/Transforms/ACIiL/CFGModule.h"
-#include "llvm/Transforms/ACIiL/CFGOperand.h"
+#include "llvm/Transforms/ACIiL/CFGUse.h"
 
 #include <set>
 
 using namespace llvm;
+
+void CFGNode::addPointerUses(Value *pointer, BasicBlock *phiBlock) {
+  std::map<Value *, PointerAliasInfo *>::iterator it =
+      function.getPointerInformation().find(pointer);
+  if (it == function.getPointerInformation().end())
+    return;
+
+  if (isa<Instruction>(it->second->getTypeSizeInBits()))
+    use.insert(CFGUse(it->second->getTypeSizeInBits(), phiBlock));
+  if (isa<Instruction>(it->second->getNumElements()))
+    use.insert(CFGUse(it->second->getNumElements(), phiBlock));
+  for (Value *alias : it->second->getAliasSet()) {
+    if (isa<Instruction>(alias))
+      use.insert(CFGUse(alias, phiBlock));
+    // recurse through the pointers of pointers until the allocation
+    if (pointer != alias)
+      addPointerUses(alias, phiBlock);
+  }
+}
 
 CFGNode::CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f)
     : phiNode(isPhiNode), block(b), function(f) {
   for (BasicBlock::iterator end = --block.end(), start = --block.begin();
        end != start; end--) {
     Instruction &inst = *end;
-    // get defines
+    // get define
     // if it has a non void return then it defines
     if (!end->getType()->isVoidTy()) {
 
-      def.insert(CFGOperand(&inst));
+      def.insert(&inst);
       // since this is SSA, remove the definition from uses set
-      // as long the value is not from phi
-      std::set<CFGOperand>::iterator it = use.find(CFGOperand(&inst));
-      if (it != use.end() && !it->isFromPHI())
-        use.erase(CFGOperand(&inst));
+      // note this will not remove PHI uses
+      std::set<CFGUse>::iterator it = use.find(CFGUse(&inst));
+      if (it != use.end())
+        use.erase(CFGUse(&inst));
     }
 
     // get uses
@@ -33,16 +52,20 @@ CFGNode::CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f)
       for (Use &u : phi->operands()) {
         // at the momemnt assume if the operand is a result of instruction then
         // it should be in use set
-        if (isa<Instruction>(u))
-          use.insert(CFGOperand(u, phi->getIncomingBlock(u)));
+        if (isa<Instruction>(u)) {
+          use.insert(CFGUse(u, phi->getIncomingBlock(u)));
+          addPointerUses(u, phi->getIncomingBlock(u));
+        }
       }
     } else {
       // otherwise just iterate over operands
       for (Value *v : end->operands()) {
         // at the momemnt assume if the operand is a result of instruction then
         // it should be in use set
-        if (isa<Instruction>(v))
-          use.insert(CFGOperand(v));
+        if (isa<Instruction>(v)) {
+          use.insert(CFGUse(v));
+          addPointerUses(v, nullptr);
+        }
       }
     }
   }
@@ -50,17 +73,17 @@ CFGNode::CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f)
 
 void CFGNode::addSuccessor(CFGNode *s) { successors.insert(s); }
 
-std::set<Value *> &CFGNode::getLiveValues() { return live; };
+std::set<CFGUse> &CFGNode::getLiveValues() { return live; };
 
 std::set<CFGNode *> &CFGNode::getSuccessors() { return successors; }
 
-std::set<CFGOperand> &CFGNode::getDef() { return def; }
+std::set<Value *> &CFGNode::getDef() { return def; }
 
-std::set<CFGOperand> &CFGNode::getUse() { return use; }
+std::set<CFGUse> &CFGNode::getUse() { return use; }
 
-std::set<CFGOperand> &CFGNode::getIn() { return in; }
+std::set<CFGUse> &CFGNode::getIn() { return in; }
 
-std::set<CFGOperand> &CFGNode::getOut() { return out; }
+std::set<CFGUse> &CFGNode::getOut() { return out; }
 
 BasicBlock &CFGNode::getLLVMBasicBlock() { return block; }
 
@@ -94,21 +117,21 @@ void CFGNode::dump() {
   errs() << "* " << getLLVMBasicBlock().getName() << "\n";
   errs() << getLLVMBasicBlock() << "\n";
   errs() << "def: \n";
-  for (CFGOperand v : getDef()) {
-    v.dump();
+  for (Value *v : getDef()) {
+    v->dump();
   }
   errs() << "use: \n";
-  for (CFGOperand v : getUse()) {
+  for (CFGUse v : getUse()) {
     v.dump();
   }
   errs() << "\n";
   errs() << "in: \n";
-  for (CFGOperand v : getIn()) {
+  for (CFGUse v : getIn()) {
     v.dump();
   }
   errs() << "\n";
   errs() << "out: \n";
-  for (CFGOperand v : getOut()) {
+  for (CFGUse v : getOut()) {
     v.dump();
   }
   errs() << "\n";

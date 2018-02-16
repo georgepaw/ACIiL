@@ -2,9 +2,11 @@
 #ifndef LLVM_TRANSFORMS_ACIIL_CFGMODULE_H
 #define LLVM_TRANSFORMS_ACIIL_CFGMODULE_H
 
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Pass.h"
 #include "llvm/Transforms/ACIiL/CFGFunction.h"
 
 #include <map>
@@ -12,7 +14,7 @@
 namespace llvm {
 class CFGModule {
 public:
-  CFGModule(Module &m, Function &ef);
+  CFGModule(Module &m, Function &ef, ModulePass *mp);
   ~CFGModule();
   void dump();
   Module &getLLVMModule();
@@ -20,7 +22,7 @@ public:
   CFGFunction &getEntryFunction();
 
 private:
-  void setUpCFGs();
+  void setUpCFGs(ModulePass *mp);
   Module &module;
   Function &entryFunction;
   std::map<Function *, CFGFunction *> functions;

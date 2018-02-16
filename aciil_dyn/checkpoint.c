@@ -1,5 +1,6 @@
 #include "cr.h"
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -112,8 +113,8 @@ void __aciil_checkpoint_start(int64_t label_number, int64_t num_variables) {
   free(file_path);
 }
 
-void __aciil_checkpoint_pointer(uint64_t elementSizeBits, uint64_t numElements,
-                                char *data) {
+void __aciil_checkpoint_pointer(uint64_t element_size_bits,
+                                uint64_t num_elements, char *data) {
   if (!__aciil_perform_checkpoint || __aciil_checkpoint_skip)
     return;
 
@@ -125,26 +126,97 @@ void __aciil_checkpoint_pointer(uint64_t elementSizeBits, uint64_t numElements,
       __aciil_merge_char_arrays(__aciil_checkpoint_path, file_name);
   if (!file_path) {
     __aciil_checkpoint_skip = 1;
-    printf("Could not create the checkpoint directory %s, checkpointing will "
-           "not be performed\n",
-           __aciil_checkpoint_path);
+    printf("Could not create the checkpoint file, checkpointing will "
+           "not be performed\n");
   }
+
+  const uint64_t alias = 0;
 
   // write to a file
   FILE *fp;
   fp = fopen(file_path, "w");
   // first write the header
-  fprintf(fp, "%" PRIu64 "\n", elementSizeBits); // size in bits
-  fprintf(fp, "%" PRIu64 "\n", numElements);     // num elements
+  fprintf(fp, "alias%" PRIu64 "\n",
+          alias); // indicates whether this is alias checkpoint or actual data
+  fprintf(fp, "%" PRIu64 "\n", element_size_bits); // size in bits
+  fprintf(fp, "%" PRIu64 "\n", num_elements);      // num elements
 
   // write a separator
   fprintf(fp, "\n");
 
   // then dump the binary data (round to a byte size)
-  for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(elementSizeBits) * numElements;
-       i++) {
+  for (uint64_t i = 0;
+       i < ROUND_BITS_TO_BYTES(element_size_bits) * num_elements; i++) {
     fprintf(fp, "%c", data[i]);
   }
+  fprintf(fp, "\n");
+
+  fclose(fp);
+  __aciil_argument_counter++;
+  free(file_path);
+}
+
+void __aciil_checkpoint_alias(uint64_t num_candidates,
+                              uint64_t element_size_bits, uint64_t num_elements,
+                              char *current_pointer, ...) {
+  if (!__aciil_perform_checkpoint || __aciil_checkpoint_skip)
+    return;
+
+  // for the data passed in
+  // dump it to a file
+  char file_name[255];
+  sprintf(file_name, "%" PRIi64, __aciil_argument_counter);
+  char *file_path =
+      __aciil_merge_char_arrays(__aciil_checkpoint_path, file_name);
+  if (!file_path) {
+    __aciil_checkpoint_skip = 1;
+    printf("Could not create the checkpoint file, checkpointing will "
+           "not be performed\n");
+  }
+
+  uint8_t found_alias = 0;
+  va_list args;
+  va_start(args, current_pointer);
+
+  uint64_t ref = 0;
+  for (uint64_t i = 0; i < num_candidates && !found_alias; i++) {
+    uint64_t alias_element_size_bits = va_arg(args, uint64_t);
+    uint64_t alias_num_elements = va_arg(args, uint64_t);
+    uint64_t alias_ref = va_arg(args, uint64_t);
+    char *pointer_start = va_arg(args, char(*));
+    // printf("0x%" PRIXPTR " 0x%" PRIXPTR "\n", (uintptr_t)current_pointer,
+    //        (uintptr_t)pointer_start);
+    if (pointer_start == current_pointer) {
+      found_alias = 1;
+      ref = alias_ref;
+    }
+  }
+  if (!found_alias) {
+    __aciil_checkpoint_skip = 1;
+    printf("Could not checkpoint an alias, checkpointing will "
+           "not be performed\n");
+  }
+  // if (found_alias)
+  //   printf("Pointer aliases the %" PRIu64 " pointer\n", ref);
+  va_end(args);
+
+  const uint64_t alias = 1;
+
+  // write to a file
+  FILE *fp;
+  fp = fopen(file_path, "w");
+  // first write the header
+  fprintf(fp, "alias%" PRIu64 "\n",
+          alias); // indicates whether this is alias checkpoint or actual data
+  fprintf(fp, "%" PRIu64 "\n", element_size_bits); // size in bits
+  fprintf(fp, "%" PRIu64 "\n", num_elements);      // num elements
+
+  // write a separator
+  fprintf(fp, "\n");
+
+  // body
+  // write which pointer is aliased
+  fprintf(fp, "%" PRIu64 "\n", ref);
   fprintf(fp, "\n");
 
   fclose(fp);

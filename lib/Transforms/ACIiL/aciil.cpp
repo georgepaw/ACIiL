@@ -1,4 +1,6 @@
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
@@ -26,6 +28,8 @@
 #include <iterator>
 #include <set>
 
+#define SHOW_CFG 0
+
 using namespace llvm;
 
 namespace {
@@ -33,35 +37,49 @@ struct ACIiLPass : public ModulePass {
   static char ID;
   ACIiLPass() : ModulePass(ID) {}
 
-  struct CheckpointRestartBlocksInfo {
+  struct CheckpointRestartBlockHelper {
     CFGNode &node;
-    BasicBlock &checkpointBlock;
-    BasicBlock &restartBlock;
+    CFGNode &checkpointNode;
+    CFGNode &restartNode;
     int64_t checkpointLabel;
-    CheckpointRestartBlocksInfo(CFGNode &n, BasicBlock &cBB, BasicBlock &rBB,
-                                int64_t lN)
-        : node(n), checkpointBlock(cBB), restartBlock(rBB),
-          checkpointLabel(lN) {}
+    std::map<Value *, Value *> checkpointedToRestoreMap;
+    std::map<Value *, uint64_t> checkpointedToIndexMap;
+    uint64_t nextCheckpointLabel = 0;
+    CheckpointRestartBlockHelper(CFGNode &node, CFGNode &checkpointNode,
+                                 CFGNode &restartNode, int64_t checkpointLabel)
+        : node(node), checkpointNode(checkpointNode), restartNode(restartNode),
+          checkpointLabel(checkpointLabel) {}
+
+    void addToCheckpointMap(Value *from, Value *to) {
+      checkpointedToRestoreMap[from] = to;
+      checkpointedToIndexMap[from] = nextCheckpointLabel++;
+    }
+
+    void addConstantToCheckpointMap(Value *constant) {
+      checkpointedToRestoreMap[constant] = constant;
+    }
   };
 
   Function *aciilCheckpointSetup;
   Function *aciilCheckpointStart;
   Function *aciilCheckpointPointer;
+  Function *aciilCheckpointAlias;
   Function *aciilCheckpointFinish;
   Function *aciilRestartGetLabel;
-  Function *aciilRestartReadFromCheckpoint;
+  Function *aciilRestartReadPointerFromCheckpoint;
+  Function *aciilRestartReadAliasFromCheckpoint;
+  Function *aciilRestartFinish;
 
   // commonly used types
   IntegerType *i64Type;
   IntegerType *i8Type;
   Type *i8PType;
 
-  virtual bool runOnModule(Module &M) {
+  virtual bool runOnModule(Module &M) override {
     errs() << "In module called: " << M.getName() << "!\n";
     Function *mainFunction = M.getFunction("main");
     if (!mainFunction)
       return false;
-
     // load the bitcodes for checkpointing and restarting exists
     SMDiagnostic error;
     std::unique_ptr<Module> checkpointModule =
@@ -77,8 +95,13 @@ struct ACIiLPass : public ModulePass {
       return false;
     }
 
+    // set up the types
+    i64Type = IntegerType::getInt64Ty(M.getContext());
+    i8Type = IntegerType::getInt8Ty(M.getContext());
+    i8PType = PointerType::get(i8Type, /*address space*/ 0);
+
     // create a CFG module with live analysis and split phi nodes correctly
-    CFGModule cfgModule(M, *mainFunction);
+    CFGModule cfgModule(M, *mainFunction, this);
 
     // link in the bitcode with functions for checkpointing
     unsigned ApplicableFlags = Linker::Flags::OverrideFromSrc;
@@ -96,27 +119,28 @@ struct ACIiLPass : public ModulePass {
     aciilCheckpointSetup = M.getFunction("__aciil_checkpoint_setup");
     aciilCheckpointStart = M.getFunction("__aciil_checkpoint_start");
     aciilCheckpointPointer = M.getFunction("__aciil_checkpoint_pointer");
+    aciilCheckpointAlias = M.getFunction("__aciil_checkpoint_alias");
     aciilCheckpointFinish = M.getFunction("__aciil_checkpoint_finish");
     if (!aciilCheckpointSetup || !aciilCheckpointStart ||
-        !aciilCheckpointPointer || !aciilCheckpointFinish) {
+        !aciilCheckpointPointer || !aciilCheckpointFinish ||
+        !aciilCheckpointAlias) {
       errs() << "could not load the checkpointing functions, checkpointing "
                 "will not be added\n";
       return false;
     }
     // load the restart functions
     aciilRestartGetLabel = M.getFunction("__aciil_restart_get_label");
-    aciilRestartReadFromCheckpoint =
-        M.getFunction("__aciil_restart_read_from_checkpoint");
-    if (!aciilRestartGetLabel || !aciilRestartReadFromCheckpoint) {
+    aciilRestartReadPointerFromCheckpoint =
+        M.getFunction("__aciil_restart_read_pointer_from_checkpoint");
+    aciilRestartReadAliasFromCheckpoint =
+        M.getFunction("__aciil_restart_read_alias_from_checkpoint");
+    aciilRestartFinish = M.getFunction("__aciil_restart_finish");
+    if (!aciilRestartGetLabel || !aciilRestartReadPointerFromCheckpoint ||
+        !aciilRestartReadAliasFromCheckpoint || !aciilRestartFinish) {
       errs() << "could not load the restarting functions, checkpointing will "
                 "not be added\n";
       return false;
     }
-
-    // set up before inserting checkpoints
-    i64Type = IntegerType::getInt64Ty(M.getContext());
-    i8Type = IntegerType::getInt8Ty(M.getContext());
-    i8PType = PointerType::get(i8Type, /*address space*/ 0);
 
     // get the main cfg
     CFGFunction &cfgMain = cfgModule.getEntryFunction();
@@ -125,12 +149,12 @@ struct ACIiLPass : public ModulePass {
   }
 
   bool addCheckpointsToFunction(CFGFunction &cfgFunction) {
-
+#if SHOW_CFG == 1
     cfgFunction.getLLVMFunction().viewCFG();
-    std::vector<CheckpointRestartBlocksInfo> checkpointAndRestartBlocks;
+#endif
+    std::vector<CFGNode *> nodesToCheckpoint;
     // insert the checkpoint and restart blocks
     // the blocks are empty at first, just with correct branching
-    int64_t nextCheckpointLabel = 0;
     for (CFGNode *cfgNode : cfgFunction.getNodes()) {
       // don't checkpoint phiNodes
       if (cfgNode->isPhiNode())
@@ -141,10 +165,23 @@ struct ACIiLPass : public ModulePass {
       unsigned numPredecessors = std::distance(pred_begin(&B), pred_end(&B));
       if (numSuccessors == 0 || numPredecessors == 0)
         continue;
+      if (numPredecessors != 1)
+        continue;
+      if (!cfgFunction
+               .findNodeByBasicBlock(
+                   *cfgNode->getLLVMBasicBlock().getSinglePredecessor())
+               ->isPhiNode())
+        continue;
       // skip a block if it has no live variables
       if (cfgNode->getLiveValues().size() == 0)
         continue;
 
+      nodesToCheckpoint.push_back(cfgNode);
+    }
+
+    std::vector<CheckpointRestartBlockHelper> checkpointAndRestartBlocks;
+    uint64_t nextCheckpointLabel = 0;
+    for (CFGNode *cfgNode : nodesToCheckpoint) {
       checkpointAndRestartBlocks.push_back(
           createCheckpointAndRestartBlocksForNode(cfgNode,
                                                   nextCheckpointLabel++));
@@ -153,28 +190,24 @@ struct ACIiLPass : public ModulePass {
     // if no checkpoints were inserted then just return now
     if (checkpointAndRestartBlocks.size() == 0)
       return true;
-
     // otherwise insert the restart function and add the branch instructions for
     // a restart
     insertRestartBlock(cfgFunction, checkpointAndRestartBlocks);
 
-    // insert the checkpoint and restart nodes into the CFG
-    for (CheckpointRestartBlocksInfo crbi : checkpointAndRestartBlocks) {
-      cfgFunction.addCheckpointNode(crbi.checkpointBlock, crbi.node);
-      cfgFunction.addRestartNode(crbi.restartBlock, crbi.node);
-    }
-
     // fill out the checkpoint and restart blocks
-    for (CheckpointRestartBlocksInfo crbi : checkpointAndRestartBlocks) {
-      fillCheckpointAndRestartBlocksForNode(crbi);
+    for (CheckpointRestartBlockHelper CRBH : checkpointAndRestartBlocks) {
+      fillCheckpointAndRestartBlocksForNode(CRBH);
     }
 
     // now need to fix dominanance
     fixDominance(cfgFunction);
+#if SHOW_CFG == 1
+    cfgFunction.getLLVMFunction().viewCFG();
+#endif
     return true;
   }
 
-  CheckpointRestartBlocksInfo
+  CheckpointRestartBlockHelper
   createCheckpointAndRestartBlocksForNode(CFGNode *node,
                                           int64_t checkpointLabel) {
     BasicBlock &B = node->getLLVMBasicBlock();
@@ -201,14 +234,18 @@ struct ACIiLPass : public ModulePass {
     // add a branch instruction from the end of the checkpoint block to the
     // original block
     BranchInst::Create(&B, restartBlock);
+    CFGNode &checkpointNode =
+        node->getParentFunction().addCheckpointNode(*checkpointBlock, *node);
+    CFGNode &restartNode =
+        node->getParentFunction().addRestartNode(*restartBlock, *node);
 
-    return CheckpointRestartBlocksInfo(*node, *checkpointBlock, *restartBlock,
-                                       checkpointLabel);
+    return CheckpointRestartBlockHelper(*node, checkpointNode, restartNode,
+                                        checkpointLabel);
   }
 
   void insertRestartBlock(
       CFGFunction &cfgFunction,
-      std::vector<CheckpointRestartBlocksInfo> checkpointAndRestartBlocks) {
+      std::vector<CheckpointRestartBlockHelper> checkpointAndRestartBlocks) {
     // the entry block is transformed in the following way
     // 1. all instructions from entry are copied to a new block
     // 2. all phi nodes are updated with that new block
@@ -247,11 +284,11 @@ struct ACIiLPass : public ModulePass {
     // happened
     SwitchInst *si = builder.CreateSwitch(ciGetLabel, noCREntry,
                                           checkpointAndRestartBlocks.size());
-    for (CheckpointRestartBlocksInfo crbi : checkpointAndRestartBlocks) {
+    for (CheckpointRestartBlockHelper CRBH : checkpointAndRestartBlocks) {
       si->addCase(
           ConstantInt::get(cfgFunction.getParentLLVMModule().getContext(),
-                           APInt(64, crbi.checkpointLabel, true)),
-          &crbi.restartBlock);
+                           APInt(64, CRBH.checkpointLabel, true)),
+          &CRBH.restartNode.getLLVMBasicBlock());
     }
 
     // add the noCREntry block into the CFG
@@ -259,209 +296,292 @@ struct ACIiLPass : public ModulePass {
   }
 
   void
-  fillCheckpointAndRestartBlocksForNode(CheckpointRestartBlocksInfo &crbi) {
-    IRBuilder<> builderCheckpointBlock(&crbi.checkpointBlock);
-    IRBuilder<> builderRestartBlock(&crbi.restartBlock);
+  fillCheckpointAndRestartBlocksForNode(CheckpointRestartBlockHelper &CRBH) {
+    IRBuilder<> builderCheckpointBlock(
+        &CRBH.checkpointNode.getLLVMBasicBlock());
+    IRBuilder<> builderRestartBlock(&CRBH.restartNode.getLLVMBasicBlock());
     // insert instructions before the branch
-    builderCheckpointBlock.SetInsertPoint(&crbi.checkpointBlock.front());
-    builderRestartBlock.SetInsertPoint(&crbi.restartBlock.front());
-
-    std::set<Value *> liveValuesAlreadyCheckpointed;
-    // note that some live values don't need to be checkpointed, only reassigned
-    // so can't use the size of liveValuesAlreadyCheckpointed
-    uint64_t numberOfValuesCheckpointed = 0;
+    builderCheckpointBlock.SetInsertPoint(
+        &CRBH.checkpointNode.getLLVMBasicBlock().front());
+    builderRestartBlock.SetInsertPoint(
+        &CRBH.restartNode.getLLVMBasicBlock().front());
     // for every live variable
-    errs() << "Start checkpointing\n";
-    for (Value *value : crbi.node.getLiveValues()) {
-      checkpointRestoreLiveValue(
-          value, crbi, builderCheckpointBlock, builderRestartBlock,
-          liveValuesAlreadyCheckpointed, numberOfValuesCheckpointed);
+    // errs() << "****Start checkpointing - "
+    //        << CRBH.node.getLLVMBasicBlock().getName() << "\n";
+    for (CFGUse live : CRBH.node.getLiveValues()) {
+      checkpointRestoreLiveValue(live.getValue(), CRBH, builderCheckpointBlock,
+                                 builderRestartBlock);
     }
-    errs() << "End checkpointing\n";
+    // errs() << "****End checkpointing\n";
 
     // add extra checkpoint calls
     // set up the checkpoint block
     // firstly call the start checkpoint function
     {
       std::vector<Value *> args;
-      args.push_back(ConstantInt::get(i64Type, crbi.checkpointLabel, true));
-      args.push_back(
-          ConstantInt::get(i64Type, numberOfValuesCheckpointed, true));
-      builderCheckpointBlock.SetInsertPoint(&crbi.checkpointBlock.front());
+      args.push_back(ConstantInt::get(i64Type, CRBH.checkpointLabel, true));
+      args.push_back(ConstantInt::get(i64Type, CRBH.nextCheckpointLabel, true));
+      builderCheckpointBlock.SetInsertPoint(
+          &CRBH.checkpointNode.getLLVMBasicBlock().front());
       builderCheckpointBlock.CreateCall(aciilCheckpointStart, args);
     }
     // add a checkpoint clean up call at the end
     {
       std::vector<Value *> args;
-      builderCheckpointBlock.SetInsertPoint(&crbi.checkpointBlock.back());
+      builderCheckpointBlock.SetInsertPoint(
+          &CRBH.checkpointNode.getLLVMBasicBlock().back());
       builderCheckpointBlock.CreateCall(aciilCheckpointFinish, args);
+      builderRestartBlock.SetInsertPoint(
+          &CRBH.restartNode.getLLVMBasicBlock().back());
+      builderRestartBlock.CreateCall(aciilRestartFinish, args);
     }
   }
 
-  void
-  checkpointRestoreLiveValue(Value *value, CheckpointRestartBlocksInfo &crbi,
-                             IRBuilder<> &builderCheckpointBlock,
-                             IRBuilder<> &builderRestartBlock,
-                             std::set<Value *> &liveValuesAlreadyCheckpointed,
-                             uint64_t &numberOfValuesCheckpointed) {
-    if (!isa<Instruction>(value)) {
-      errs() << "TODO can a live value not be an instruction?\n";
-      return;
-    }
-    value->dump();
+  Value *checkpointRestoreLiveValue(Value *liveValue,
+                                    CheckpointRestartBlockHelper &CRBH,
+                                    IRBuilder<> &builderCheckpointBlock,
+                                    IRBuilder<> &builderRestartBlock) {
+    Value *restoreLiveValue = nullptr;
+    // TODO at the moment assume that live values are instructions or constants
+    if (Instruction *i = dyn_cast<Instruction>(liveValue)) {
+      if (i->getType()->isPtrOrPtrVectorTy()) {
+        restoreLiveValue = checkpointRestoreLiveValuePointer(
+            liveValue, CRBH, builderCheckpointBlock, builderRestartBlock);
 
-    if (liveValuesAlreadyCheckpointed.find(value) !=
-        liveValuesAlreadyCheckpointed.end()) {
-      errs() << "Live value already checkpointed\n";
-      return;
-    }
-
-    Value *valueOutToUpdateInMapping = nullptr;
-
-    Instruction *i = cast<Instruction>(value);
-
-    Type *ty = i->getType();
-
-    if (ty->isPtrOrPtrVectorTy()) {
-      switch (i->getOpcode()) {
-      case Instruction::GetElementPtr: {
-        // if it's a getElementPtr instruction then skip
-        GetElementPtrInst *gepLive = cast<GetElementPtrInst>(i);
-        Value *pointer = gepLive->getPointerOperand();
-        // for GEP instruction need to checkpoint/restore the actual data
-        checkpointRestoreLiveValue(
-            pointer, crbi, builderCheckpointBlock, builderRestartBlock,
-            liveValuesAlreadyCheckpointed, numberOfValuesCheckpointed);
-        // checkpoint
-        // don't need to do anything as we are not checkpointing an address
-
-        // restore
-        // clone the GEP instruction into restore block
-        GetElementPtrInst *gepRestore =
-            cast<GetElementPtrInst>(gepLive->clone());
-        builderRestartBlock.Insert(gepRestore);
-        // replace the pointer to the one created in the restart block
-        Value *restorePointer = crbi.node.getParentFunction()
-                                    .findNodeByBasicBlock(crbi.restartBlock)
-                                    ->getLiveMapping(pointer);
-        unsigned opIdx = gepRestore->getPointerOperandIndex();
-        gepRestore->setOperand(opIdx, restorePointer);
-        valueOutToUpdateInMapping = gepRestore;
-
-        liveValuesAlreadyCheckpointed.insert(value);
-        break;
+      } else {
+        restoreLiveValue = checkpointRestoreLiveValueScalar(
+            liveValue, CRBH, builderCheckpointBlock, builderRestartBlock);
       }
-      case Instruction::Alloca: {
-        AllocaInst *aiLive = cast<AllocaInst>(i);
-        // TODO for now assume pointer is alloca
-        uint64_t numElements =
-            cast<ArrayType>(aiLive->getAllocatedType())->getNumElements();
-        uint64_t elementSizeBits =
-            crbi.node.getParentLLVMModule().getDataLayout().getTypeSizeInBits(
-                cast<ArrayType>(aiLive->getAllocatedType())->getElementType());
-        // checkpoint
-        addCheckpointInstructionsToBlock(aiLive, numElements, elementSizeBits,
-                                         builderCheckpointBlock,
-                                         numberOfValuesCheckpointed);
-        // restore
-        // clone the allocating instruction into restore block
-        AllocaInst *aiRestore = cast<AllocaInst>(aiLive->clone());
-        builderRestartBlock.Insert(aiRestore);
-        addRestoreInstructionsToBlock(aiRestore, numElements, elementSizeBits,
-                                      builderRestartBlock);
-        valueOutToUpdateInMapping = aiRestore;
-
-        liveValuesAlreadyCheckpointed.insert(value);
-        break;
-      }
-      default: {
-        errs() << "****** POINTER BEING CHECKPOINTED AS A SCALAR!!!! ******\n";
-        ty->dump();
-        PointerType *pty = cast<PointerType>(ty);
-        pty->getElementType()->dump();
-        valueOutToUpdateInMapping = checkpointRestoreLiveValueScalar(
-            value, crbi, builderCheckpointBlock, builderRestartBlock,
-            liveValuesAlreadyCheckpointed, numberOfValuesCheckpointed);
-      }
-      }
+      // update the mapping correctly
+      if (restoreLiveValue)
+        CRBH.restartNode.addLiveMapping(liveValue, restoreLiveValue);
+    } else if (isa<Constant>(liveValue)) {
+      restoreLiveValue = checkpointRestoreConstant(liveValue, CRBH);
     } else {
-      valueOutToUpdateInMapping = checkpointRestoreLiveValueScalar(
-          value, crbi, builderCheckpointBlock, builderRestartBlock,
-          liveValuesAlreadyCheckpointed, numberOfValuesCheckpointed);
+      errs() << "Checkpointing for this value not implemented! Value "
+             << *liveValue << "\n";
+      exit(-1);
     }
-
-    // update the mapping correctly
-    if (valueOutToUpdateInMapping)
-      crbi.node.getParentFunction()
-          .findNodeByBasicBlock(crbi.restartBlock)
-          ->addLiveMapping(value, valueOutToUpdateInMapping);
+    return restoreLiveValue;
   }
 
-  Value *checkpointRestoreLiveValueScalar(
-      Value *value, CheckpointRestartBlocksInfo &crbi,
-      IRBuilder<> &builderCheckpointBlock, IRBuilder<> &builderRestartBlock,
-      std::set<Value *> &liveValuesAlreadyCheckpointed,
-      uint64_t &numberOfValuesCheckpointed) {
+  Value *checkpointRestoreLiveValuePointer(Value *liveValue,
+                                           CheckpointRestartBlockHelper &CRBH,
+                                           IRBuilder<> &builderCheckpointBlock,
+                                           IRBuilder<> &builderRestartBlock) {
+
+    Value *restoreLiveValue = nullptr;
+
+    std::map<Value *, PointerAliasInfo *>::iterator it =
+        CRBH.node.getParentFunction().getPointerInformation().find(liveValue);
+    if (it == CRBH.node.getParentFunction().getPointerInformation().end()) {
+      errs() << "Could not find pointer info for " << *it->first
+             << ". Aborting\n";
+      exit(-1);
+    }
+    PointerAliasInfo *PAI = it->second;
+    // make sure that pointer size is checkpointed before the pointer itself
+    Value *restoreTypeSizeInBits =
+        checkpointRestoreLiveValue(PAI->getTypeSizeInBits(), CRBH,
+                                   builderCheckpointBlock, builderRestartBlock);
+    Value *restoreNumElements =
+        checkpointRestoreLiveValue(PAI->getNumElements(), CRBH,
+                                   builderCheckpointBlock, builderRestartBlock);
+    // checkpoint pointer until this base condition
+    for (Value *alias : PAI->getAliasSet()) {
+      if (liveValue != alias && isa<Instruction>(alias)) {
+        checkpointRestoreLiveValue(alias, CRBH, builderCheckpointBlock,
+                                   builderRestartBlock);
+      }
+    }
+
+    if (CRBH.checkpointedToRestoreMap.find(liveValue) !=
+        CRBH.checkpointedToRestoreMap.end()) {
+      // errs() << "Already checkpointed\n";
+      return CRBH.checkpointedToRestoreMap.find(liveValue)->second;
+    }
+
+    Instruction *i = cast<Instruction>(liveValue);
+
+    switch (i->getOpcode()) {
+    case Instruction::Alloca: {
+      AllocaInst *aiLive = cast<AllocaInst>(i);
+      // checkpoint
+      addCheckpointPointerInstructionsToBlock(aiLive, PAI->getTypeSizeInBits(),
+                                              PAI->getNumElements(),
+                                              builderCheckpointBlock);
+      // restore
+      // clone the allocating instruction into restore block
+      AllocaInst *aiRestore = cast<AllocaInst>(aiLive->clone());
+      builderRestartBlock.Insert(aiRestore, aiLive->getName() + ".restart");
+      addRestorePointerInstructionsToBlock(aiRestore, restoreTypeSizeInBits,
+                                           restoreNumElements,
+                                           builderRestartBlock);
+      restoreLiveValue = aiRestore;
+      CRBH.addToCheckpointMap(liveValue, aiRestore);
+      break;
+    }
+    case Instruction::PHI: {
+      PHINode *phiLive = cast<PHINode>(i);
+      // checkpoint
+      addCheckpointAliasInstructionsToBlock(phiLive, PAI, CRBH,
+                                            builderCheckpointBlock);
+      // restore
+      Value *restoredBC = addRestoreAliasInstructionsToBlock(
+          restoreTypeSizeInBits, restoreNumElements, builderRestartBlock);
+      Value *restored = builderRestartBlock.CreateBitCast(
+          restoredBC, phiLive->getType(), phiLive->getName() + ".restart");
+      restoreLiveValue = restored;
+      CRBH.addToCheckpointMap(liveValue, restored);
+      break;
+    }
+    case Instruction::GetElementPtr: {
+      GetElementPtrInst *gepLive = cast<GetElementPtrInst>(i);
+      // checkpoint
+      addCheckpointAliasInstructionsToBlock(gepLive, PAI, CRBH,
+                                            builderCheckpointBlock);
+      // restore
+      Value *restoredBC = addRestoreAliasInstructionsToBlock(
+          restoreTypeSizeInBits, restoreNumElements, builderRestartBlock);
+      Value *restored = builderRestartBlock.CreateBitCast(
+          restoredBC, gepLive->getType(), gepLive->getName() + ".restart");
+      restoreLiveValue = restored;
+      CRBH.addToCheckpointMap(liveValue, restored);
+      break;
+    }
+    case Instruction::BitCast: {
+      BitCastInst *bcLive = cast<BitCastInst>(i);
+      // checkpoint
+      addCheckpointAliasInstructionsToBlock(bcLive, PAI, CRBH,
+                                            builderCheckpointBlock);
+      // restore
+      Value *restoredBC = addRestoreAliasInstructionsToBlock(
+          restoreTypeSizeInBits, restoreNumElements, builderRestartBlock);
+      Value *restored = builderRestartBlock.CreateBitCast(
+          restoredBC, bcLive->getType(), bcLive->getName() + ".restart");
+      restoreLiveValue = restored;
+      CRBH.addToCheckpointMap(liveValue, restored);
+      break;
+    }
+    default: {
+      errs() << "****** POINTER BEING CHECKPOINTED AS A SCALAR!!!! ******\n";
+      liveValue->dump();
+      i->getType()->dump();
+      PointerType *pty = cast<PointerType>(i->getType());
+      pty->getElementType()->dump();
+      exit(-1);
+    }
+    }
+    return restoreLiveValue;
+  }
+
+  Value *checkpointRestoreLiveValueScalar(Value *liveValue,
+                                          CheckpointRestartBlockHelper &CRBH,
+                                          IRBuilder<> &builderCheckpointBlock,
+                                          IRBuilder<> &builderRestartBlock) {
+    if (CRBH.checkpointedToRestoreMap.find(liveValue) !=
+        CRBH.checkpointedToRestoreMap.end()) {
+      // errs() << "Already checkpointed\n";
+      return CRBH.checkpointedToRestoreMap.find(liveValue)->second;
+    }
+
     // if the live value is not a pointer, then store it in some memory
-
-    // TODO for now assume it is a scalar type
-
     // First alloca an array with just one element
-    AllocaInst *ai = crbi.node.getParentFunction().getAllocManager().getAlloca(
-        value->getType());
-    uint64_t numElements = 1;
-    uint64_t elementSizeBits =
-        crbi.node.getParentLLVMModule().getDataLayout().getTypeSizeInBits(
-            value->getType());
+    AllocaInst *ai = CRBH.node.getParentFunction().getAllocManager().getAlloca(
+        liveValue->getType());
+    Value *typeSizeInBits = ConstantInt::get(
+        i64Type,
+        CRBH.node.getParentLLVMModule().getDataLayout().getTypeSizeInBits(
+            liveValue->getType()),
+        false);
+    Value *numElements = ConstantInt::get(i64Type, 1, false);
     // checkpoint
     // store the value in that alloca
-    builderCheckpointBlock.CreateStore(value, ai);
-    addCheckpointInstructionsToBlock(ai, numElements, elementSizeBits,
-                                     builderCheckpointBlock,
-                                     numberOfValuesCheckpointed);
+    builderCheckpointBlock.CreateStore(liveValue, ai);
+    addCheckpointPointerInstructionsToBlock(ai, typeSizeInBits, numElements,
+                                            builderCheckpointBlock);
     // restore
-    addRestoreInstructionsToBlock(ai, numElements, elementSizeBits,
-                                  builderRestartBlock);
+    addRestorePointerInstructionsToBlock(ai, typeSizeInBits, numElements,
+                                         builderRestartBlock);
     LoadInst *li =
-        builderRestartBlock.CreateLoad(ai, value->getName() + ".restart");
-    crbi.node.getParentFunction().getAllocManager().releaseAlloca(ai);
-    liveValuesAlreadyCheckpointed.insert(value);
+        builderRestartBlock.CreateLoad(ai, liveValue->getName() + ".restart");
+    CRBH.addToCheckpointMap(liveValue, li);
+    CRBH.node.getParentFunction().getAllocManager().releaseAlloca(ai);
     return li;
   }
 
-  void addCheckpointInstructionsToBlock(Value *valueToCheckpoint,
-                                        uint64_t numElements,
-                                        uint64_t elementSizeBits,
-                                        IRBuilder<> &builder,
-                                        uint64_t &numberOfValuesCheckpointed) {
-    errs() << "Num elements " << numElements << " element size "
-           << elementSizeBits << "\n";
+  Value *checkpointRestoreConstant(Value *liveValue,
+                                   CheckpointRestartBlockHelper &CRBH) {
+    CRBH.addConstantToCheckpointMap(liveValue);
+    return liveValue;
+  }
+
+  void addCheckpointPointerInstructionsToBlock(Value *valueToCheckpoint,
+                                               Value *typeSizeInBits,
+                                               Value *numElements,
+                                               IRBuilder<> &builder) {
     // bitcast alloca to bytes
     Value *bc = builder.CreateBitCast(valueToCheckpoint, i8PType,
                                       valueToCheckpoint->getName() + ".i8");
 
     std::vector<Value *> checkpointArgs;
-    checkpointArgs.push_back(ConstantInt::get(i64Type, elementSizeBits, false));
-    checkpointArgs.push_back(ConstantInt::get(i64Type, numElements, false));
+    checkpointArgs.push_back(typeSizeInBits);
+    checkpointArgs.push_back(numElements);
     checkpointArgs.push_back(bc);
     builder.CreateCall(aciilCheckpointPointer, checkpointArgs);
-
-    numberOfValuesCheckpointed++;
   }
 
-  void addRestoreInstructionsToBlock(Value *valueToRestore,
-                                     uint64_t numElements,
-                                     uint64_t elementSizeBits,
-                                     IRBuilder<> &builder) {
+  void addCheckpointAliasInstructionsToBlock(Value *valueToCheckpoint,
+                                             PointerAliasInfo *PAI,
+                                             CheckpointRestartBlockHelper &CRBH,
+                                             IRBuilder<> &builder) {
+    // bitcast alloca to bytes
+    Value *bc = builder.CreateBitCast(valueToCheckpoint, i8PType,
+                                      valueToCheckpoint->getName() + ".i8");
+
+    std::vector<Value *> checkpointArgs;
+    checkpointArgs.push_back(
+        ConstantInt::get(i64Type, PAI->getAliasSet().size(), false));
+    checkpointArgs.push_back(PAI->getTypeSizeInBits());
+    checkpointArgs.push_back(PAI->getNumElements());
+    checkpointArgs.push_back(bc);
+    for (Value *alias : PAI->getAliasSet()) {
+      PointerAliasInfo *aliasPAI =
+          CRBH.node.getParentFunction().getPointerInformation()[alias];
+      Value *aliasBC =
+          builder.CreateBitCast(alias, i8PType, alias->getName() + ".i8");
+      checkpointArgs.push_back(aliasPAI->getTypeSizeInBits());
+      checkpointArgs.push_back(aliasPAI->getNumElements());
+      checkpointArgs.push_back(
+          ConstantInt::get(i64Type, CRBH.checkpointedToIndexMap[alias], false));
+      checkpointArgs.push_back(aliasBC);
+    }
+    builder.CreateCall(aciilCheckpointAlias, checkpointArgs);
+  }
+
+  void addRestorePointerInstructionsToBlock(Value *valueToRestore,
+                                            Value *typeSizeInBits,
+                                            Value *numElements,
+                                            IRBuilder<> &builder) {
     // bitcast it to bytes
     Value *bc = builder.CreateBitCast(valueToRestore, i8PType,
                                       valueToRestore->getName() + ".i8");
     std::vector<Value *> restartArgs;
-    restartArgs.push_back(ConstantInt::get(i64Type, elementSizeBits, false));
-    restartArgs.push_back(ConstantInt::get(i64Type, numElements, false));
+    restartArgs.push_back(typeSizeInBits);
+    restartArgs.push_back(numElements);
     restartArgs.push_back(bc);
-    // call the load function with the correct address
-    builder.CreateCall(aciilRestartReadFromCheckpoint, restartArgs);
+
+    builder.CreateCall(aciilRestartReadPointerFromCheckpoint, restartArgs);
+  }
+
+  Value *addRestoreAliasInstructionsToBlock(Value *typeSizeInBits,
+                                            Value *numElements,
+                                            IRBuilder<> &builder) {
+    std::vector<Value *> restartArgs;
+    restartArgs.push_back(typeSizeInBits);
+    restartArgs.push_back(numElements);
+
+    return builder.CreateCall(aciilRestartReadAliasFromCheckpoint, restartArgs);
   }
 
   void fixDominance(CFGFunction &cfgFunction) {
@@ -492,56 +612,58 @@ struct ACIiLPass : public ModulePass {
     std::vector<PHINodeMappingToUpdate> phisToUpdate;
     std::vector<PHINodeToRemove> phisToRemove;
     for (CFGNode *node : cfgFunction.getNodes()) {
-      for (Value *value : node->getLiveValues()) {
-        bool phiExists = false;
-        // first need to check if a phi already exists, in that case only the
-        // values need to be updated
-        for (PHINode &phi : node->getLLVMBasicBlock().phis()) {
-          for (unsigned phiIdx = 0; phiIdx < phi.getNumIncomingValues();
-               phiIdx++) {
-            if (phi.getIncomingValue(phiIdx) == value) {
-              phisToUpdate.push_back(
-                  PHINodeMappingToUpdate(phi, value, phiIdx));
-              phiExists = true;
+      for (CFGUse live : node->getLiveValues()) {
+        Value *value = live.getValue();
+
+        if (live.getUseType() == CFGUseType::PHIOnly) {
+          for (PHINode &phi : node->getLLVMBasicBlock().phis()) {
+            for (unsigned phiIdx = 0; phiIdx < phi.getNumIncomingValues();
+                 phiIdx++) {
+              if (phi.getIncomingValue(phiIdx) == value) {
+                phisToUpdate.push_back(
+                    PHINodeMappingToUpdate(phi, value, phiIdx));
+              }
             }
           }
-        }
-        if (phiExists)
-          continue;
-
-        // otherwise if phi does not exist, need to create a new one
-        // phi node for this live variable
-        PHINode *phi = PHINode::Create(
-            value->getType(),
-            std::distance(pred_begin(&node->getLLVMBasicBlock()),
-                          pred_end(&node->getLLVMBasicBlock())),
-            value->getName() + "." + node->getLLVMBasicBlock().getName(),
-            &node->getLLVMBasicBlock().front());
-        // update the uses
-        for (Instruction &inst : node->getLLVMBasicBlock()) {
-          for (unsigned i = 0; i < inst.getNumOperands(); i++) {
-            if (inst.getOperand(i) == value)
-              inst.setOperand(i, phi);
+        } else {
+          // otherwise if phi does not exist, need to create a new one
+          // phi node for this live variable
+          PHINode *phi = PHINode::Create(
+              value->getType(),
+              std::distance(pred_begin(&node->getLLVMBasicBlock()),
+                            pred_end(&node->getLLVMBasicBlock())),
+              value->getName() + "." + node->getLLVMBasicBlock().getName(),
+              &node->getLLVMBasicBlock().front());
+          // update the uses
+          for (Instruction &inst : node->getLLVMBasicBlock()) {
+            for (unsigned i = 0; i < inst.getNumOperands(); i++) {
+              if (inst.getOperand(i) == value)
+                inst.setOperand(i, phi);
+            }
           }
-        }
 
-        // add the values that need to be updated with the mappings
-        unsigned phiIdx = 0;
-        for (BasicBlock *pred : predecessors(&node->getLLVMBasicBlock())) {
-          phi->addIncoming(Constant::getNullValue(value->getType()), pred);
-          phisToUpdate.push_back(PHINodeMappingToUpdate(*phi, value, phiIdx++));
+          // add the values that need to be updated with the mappings
+          unsigned phiIdx = 0;
+          for (BasicBlock *pred : predecessors(&node->getLLVMBasicBlock())) {
+            phi->addIncoming(Constant::getNullValue(value->getType()), pred);
+            phisToUpdate.push_back(
+                PHINodeMappingToUpdate(*phi, value, phiIdx++));
+          }
+          node->addLiveMapping(value, phi);
+          // phis are only removed right at the end because then the dominance
+          // has been fixed
+          if (phi->getNumIncomingValues() == 1)
+            phisToRemove.push_back(PHINodeToRemove(*phi, value, *node));
         }
-        node->addLiveMapping(value, phi);
-        // phis are only removed right at the end because then the dominance has
-        // been fixed
-        if (phi->getNumIncomingValues() == 1)
-          phisToRemove.push_back(PHINodeToRemove(*phi, value, *node));
       }
     }
     // Step 2.
     // Now that all phi nodes have been created with correct mappings, update
     // the mappings in the phi nodes
     for (PHINodeMappingToUpdate ptu : phisToUpdate) {
+      // todo assume instruction for now only
+      if (!isa<Instruction>(ptu.value))
+        continue;
       CFGNode *pred = cfgFunction.findNodeByBasicBlock(
           *ptu.phi.getIncomingBlock(ptu.phiIdx));
       ptu.phi.setIncomingValue(ptu.phiIdx, pred->getLiveMapping(ptu.value));
@@ -558,11 +680,32 @@ struct ACIiLPass : public ModulePass {
       // update the mapping
       ptr.node.addLiveMapping(ptr.value, phiReplacment);
     }
+    for (CFGNode *node : cfgFunction.getNodes()) {
+      std::vector<PHINode *> phis;
+      for (PHINode &phi : node->getLLVMBasicBlock().phis()) {
+        if (phi.hasConstantValue())
+          phis.push_back(&phi);
+      }
+      for (PHINode *phi : phis) {
+        phi->replaceAllUsesWith(phi->hasConstantValue());
+        phi->eraseFromParent();
+      }
+    }
+  }
 
-    cfgFunction.getLLVMFunction().viewCFG();
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<TargetLibraryInfoWrapperPass>();
+    AU.addRequired<AAResultsWrapperPass>();
   }
 };
 } // namespace
+
+INITIALIZE_PASS_BEGIN(ACIiLPass, "ACIiL",
+                      "Automatic Checkpoint/Restart Insertion Pass", true, true)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_END(ACIiLPass, "ACIiL",
+                    "Automatic Checkpoint/Restart Insertion Pass", true, true)
 
 char ACIiLPass::ID = 0;
 

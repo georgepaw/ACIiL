@@ -3,6 +3,7 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/ACIiL/CFGFunction.h"
 
@@ -10,8 +11,9 @@
 
 using namespace llvm;
 
-CFGModule::CFGModule(Module &m, Function &ef) : module(m), entryFunction(ef) {
-  setUpCFGs();
+CFGModule::CFGModule(Module &m, Function &ef, ModulePass *mp)
+    : module(m), entryFunction(ef) {
+  setUpCFGs(mp);
 }
 
 CFGModule::~CFGModule() {
@@ -20,9 +22,15 @@ CFGModule::~CFGModule() {
   }
 }
 
-void CFGModule::setUpCFGs() {
+void CFGModule::setUpCFGs(ModulePass *mp) {
+  TargetLibraryInfo &TLI =
+      mp->getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
   for (Function &F : module) {
-    functions.insert(std::make_pair(&F, new CFGFunction(F, *this)));
+    AAResults *AA =
+        F.isDeclaration()
+            ? nullptr
+            : &mp->getAnalysis<AAResultsWrapperPass>(F).getAAResults();
+    functions.insert(std::make_pair(&F, new CFGFunction(F, *this, TLI, AA)));
   }
 }
 

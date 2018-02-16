@@ -9,6 +9,7 @@
 
 char *__aciil_checkpoint_path;
 int64_t __aciil_restart_checkpoint_file_counter = 0;
+uint8_t **__aciil_pointer_alias_address;
 
 uint64_t __aciil_get_checkpoint_before(char *base_path, int64_t epoch_before) {
 
@@ -96,39 +97,56 @@ uint8_t __aciil_checkpoint_valid(int64_t num_variables) {
     if (!fp)
       return 0;
     // read the header
+    uint64_t alias = 0;
     uint64_t size = 0;
-    uint64_t numElements = 0;
-    char newLine;
-    if (fscanf(fp, "%" PRIi64 "%c", &size, &newLine) != 2 ||
-        newLine != '\n') // read size
+    uint64_t num_elements = 0;
+    char new_line;
+    if (fscanf(fp, "alias%" PRIi64 "%c", &alias, &new_line) != 2 ||
+        new_line != '\n') // read size
     {
       fclose(fp);
       return 0;
     }
-    if (fscanf(fp, "%" PRIi64 "%c", &numElements, &newLine) != 2 ||
-        newLine != '\n') // read num elements
+    if (fscanf(fp, "%" PRIi64 "%c", &size, &new_line) != 2 ||
+        new_line != '\n') // read size
+    {
+      fclose(fp);
+      return 0;
+    }
+    if (fscanf(fp, "%" PRIi64 "%c", &num_elements, &new_line) != 2 ||
+        new_line != '\n') // read num elements
     {
       fclose(fp);
       return 0;
     }
 
     // read the separator
-    if (fscanf(fp, "%c", &newLine) != 1 || newLine != '\n') {
+    if (fscanf(fp, "%c", &new_line) != 1 || new_line != '\n') {
       fclose(fp);
       return 0;
     }
 
-    // read the data
-    for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(size) * numElements; i++) {
-      char c;
-      if (fscanf(fp, "%c", &c) != 1) // read char at a time
+    if (alias) {
+      uint64_t aliases_to;
+      if (fscanf(fp, "%" PRIi64 "%c", &aliases_to, &new_line) != 2 ||
+          new_line != '\n') // read aliases_to
       {
         fclose(fp);
         return 0;
       }
+    } else {
+      // read the data
+      for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(size) * num_elements; i++) {
+        char c;
+        if (fscanf(fp, "%c", &c) != 1) // read char at a time
+        {
+          fclose(fp);
+          return 0;
+        }
+      }
     }
     // read the EOF
-    if (fscanf(fp, "%c", &newLine) != 1 || newLine != '\n') {
+    if (fscanf(fp, "%c", &new_line) != 1 || new_line != '\n') {
       fclose(fp);
       return 0;
     }
@@ -203,6 +221,8 @@ int64_t __aciil_restart_get_label() {
       if (label >= 0 && __aciil_checkpoint_valid(num_variables)) {
         printf("*** ACIIL - Using checkpoint with label %" PRIi64 " ***\n",
                label);
+        __aciil_pointer_alias_address =
+            malloc(sizeof(uint8_t **) * num_variables);
         return label;
       } else {
         printf("Checkpoint invalid, trying an older version.\n");
@@ -215,41 +235,50 @@ int64_t __aciil_restart_get_label() {
   return -1;
 }
 
-void __aciil_restart_read_from_checkpoint(uint64_t sizeBits,
-                                          uint64_t numElements, uint8_t *data) {
+void __aciil_restart_read_pointer_from_checkpoint(uint64_t size_bits,
+                                                  uint64_t num_elements,
+                                                  uint8_t *data) {
   char file_name[1024];
   sprintf(file_name, "%" PRIi64, __aciil_restart_checkpoint_file_counter);
   char *file = __aciil_merge_char_arrays(__aciil_checkpoint_path, file_name);
   FILE *fp;
   fp = fopen(file, "r");
   // read the header
-  uint64_t sizeFromFile = 0;
-  uint64_t numElementsFromFile = 0;
-  char newLine;
-  if (fscanf(fp, "%" PRIu64 "%c", &sizeFromFile, &newLine) != 2 ||
-      newLine != '\n') // read size
+  uint64_t alias_from_file = 0;
+  uint64_t size_from_file = 0;
+  uint64_t num_elements_from_file = 0;
+  char new_line;
+  if (fscanf(fp, "alias%" PRIi64 "%c", &alias_from_file, &new_line) != 2 ||
+      new_line != '\n') // read size
+  {
+    printf("Restart has failed - header(alias) - aborted.\n");
+    fclose(fp);
+    exit(-1);
+  }
+  if (fscanf(fp, "%" PRIu64 "%c", &size_from_file, &new_line) != 2 ||
+      new_line != '\n') // read size
   {
     printf("Restart has failed - header(size) - aborted.\n");
     fclose(fp);
     exit(-1);
   }
-  if (fscanf(fp, "%" PRIu64 "%c", &numElementsFromFile, &newLine) != 2 ||
-      newLine != '\n') // read num elements
+  if (fscanf(fp, "%" PRIu64 "%c", &num_elements_from_file, &new_line) != 2 ||
+      new_line != '\n') // read num elements
   {
-    printf("Restart has failed - header(numElements) - aborted.\n");
+    printf("Restart has failed - header(num_elements) - aborted.\n");
     fclose(fp);
     exit(-1);
   }
 
   // read the separator
-  if (fscanf(fp, "%c", &newLine) != 1 || newLine != '\n') {
+  if (fscanf(fp, "%c", &new_line) != 1 || new_line != '\n') {
     printf("Restart has failed - separator - aborted.\n");
     fclose(fp);
     exit(-1);
   }
 
   // read the data
-  for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(sizeBits) * numElements; i++) {
+  for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(size_bits) * num_elements; i++) {
     if (fscanf(fp, "%c", &data[i]) != 1) // read char at a time
     {
       printf("Restart has failed - body - aborted.\n");
@@ -257,14 +286,84 @@ void __aciil_restart_read_from_checkpoint(uint64_t sizeBits,
       exit(-1);
     }
   }
-  if (fscanf(fp, "%c", &newLine) != 1 || newLine != '\n') {
+  if (fscanf(fp, "%c", &new_line) != 1 || new_line != '\n') {
+    printf("Restart has failed - EOF - aborted. Char is %x\n", new_line);
+    fclose(fp);
+    exit(-1);
+  }
+  fclose(fp);
+  free(file);
+  __aciil_pointer_alias_address[__aciil_restart_checkpoint_file_counter] = data;
+  printf("*** ACIIL - restored element %" PRIu64 " ***\n",
+         __aciil_restart_checkpoint_file_counter);
+  __aciil_restart_checkpoint_file_counter++;
+}
+
+uint8_t *__aciil_restart_read_alias_from_checkpoint(uint64_t size_bits,
+                                                    uint64_t num_elements) {
+  char file_name[1024];
+  sprintf(file_name, "%" PRIi64, __aciil_restart_checkpoint_file_counter);
+  char *file = __aciil_merge_char_arrays(__aciil_checkpoint_path, file_name);
+  FILE *fp;
+  fp = fopen(file, "r");
+  // read the header
+  uint64_t alias_from_file = 0;
+  uint64_t size_from_file = 0;
+  uint64_t num_elements_from_file = 0;
+  uint64_t aliases_to = 0;
+  char new_line;
+  if (fscanf(fp, "alias%" PRIi64 "%c", &alias_from_file, &new_line) != 2 ||
+      new_line != '\n') // read size
+  {
+    printf("Restart has failed - header(alias) - aborted.\n");
+    fclose(fp);
+    exit(-1);
+  }
+  if (fscanf(fp, "%" PRIu64 "%c", &size_from_file, &new_line) != 2 ||
+      new_line != '\n') // read size
+  {
+    printf("Restart has failed - header(size) - aborted.\n");
+    fclose(fp);
+    exit(-1);
+  }
+  if (fscanf(fp, "%" PRIu64 "%c", &num_elements_from_file, &new_line) != 2 ||
+      new_line != '\n') // read num elements
+  {
+    printf("Restart has failed - header(num_elements) - aborted.\n");
+    fclose(fp);
+    exit(-1);
+  }
+
+  // read the separator
+  if (fscanf(fp, "%c", &new_line) != 1 || new_line != '\n') {
+    printf("Restart has failed - separator - aborted.\n");
+    fclose(fp);
+    exit(-1);
+  }
+  // body
+  if (fscanf(fp, "%" PRIu64 "%c", &aliases_to, &new_line) != 2 ||
+      new_line != '\n') // aliases to
+  {
+    printf("Restart has failed - body(aliases_to) - aborted.\n");
+    fclose(fp);
+    exit(-1);
+  }
+
+  if (fscanf(fp, "%c", &new_line) != 1 || new_line != '\n') {
     printf("Restart has failed - EOF - aborted.\n");
     fclose(fp);
     exit(-1);
   }
   fclose(fp);
   free(file);
+
+  uint8_t *out =
+      __aciil_pointer_alias_address[__aciil_restart_checkpoint_file_counter] =
+          __aciil_pointer_alias_address[aliases_to];
   printf("*** ACIIL - restored element %" PRIu64 " ***\n",
          __aciil_restart_checkpoint_file_counter);
   __aciil_restart_checkpoint_file_counter++;
+  return out;
 }
+
+void __aciil_restart_finish() { free(__aciil_pointer_alias_address); }

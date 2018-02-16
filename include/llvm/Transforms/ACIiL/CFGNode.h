@@ -6,7 +6,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Transforms/ACIiL/CFGOperand.h"
+#include "llvm/Transforms/ACIiL/CFGUse.h"
 
 #include <map>
 #include <set>
@@ -18,7 +18,7 @@ class CFGNode {
 public:
   CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f);
   BasicBlock &getLLVMBasicBlock();
-  std::set<Value *> &getLiveValues();
+  std::set<CFGUse> &getLiveValues();
   void addSuccessor(CFGNode *s);
   std::set<CFGNode *> &getSuccessors();
   bool isPhiNode();
@@ -31,21 +31,21 @@ public:
   Module &getParentLLVMModule();
 
 private:
-  std::set<CFGOperand> &getIn();
-  std::set<CFGOperand> &getOut();
-  std::set<CFGOperand> &getDef();
-  std::set<CFGOperand> &getUse();
+  std::set<CFGUse> &getIn();
+  std::set<CFGUse> &getOut();
+  std::set<Value *> &getDef();
+  std::set<CFGUse> &getUse();
   bool phiNode;
   BasicBlock &block;
   std::set<CFGNode *> successors;
-  std::set<CFGOperand> use;
-  std::set<CFGOperand> def;
-  std::set<CFGOperand> in;
-  std::set<CFGOperand> out;
-  std::set<Value *> live;
+  std::set<CFGUse> use;
+  std::set<Value *> def;
+  std::set<CFGUse> in;
+  std::set<CFGUse> out;
+  std::set<CFGUse> live;
   std::map<Value *, Value *> liveValuesMap;
   CFGFunction &function;
-
+  void addPointerUses(Value *pointer, BasicBlock *phiBlock);
   friend class CFGFunction;
 };
 } // namespace llvm

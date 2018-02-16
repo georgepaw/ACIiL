@@ -1,13 +1,17 @@
 #include "llvm/Transforms/ACIiL/CFGFunction.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
+#include "llvm/Transforms/ACIiL/ACRIiLPointerAlias.h"
 #include "llvm/Transforms/ACIiL/CFGModule.h"
 #include "llvm/Transforms/ACIiL/CFGNode.h"
-#include "llvm/Transforms/ACIiL/CFGOperand.h"
+#include "llvm/Transforms/ACIiL/CFGUse.h"
 #include "llvm/Transforms/ACIiL/CFGUtils.h"
 
 #include <map>
@@ -16,14 +20,24 @@
 
 using namespace llvm;
 
-CFGFunction::CFGFunction(Function &f, CFGModule &m)
+CFGFunction::CFGFunction(Function &f, CFGModule &m, TargetLibraryInfo &TLI,
+                         AliasAnalysis *AA)
     : function(f), am(*this), module(m) {
+  pointerAnalysis(TLI, AA);
   setUpCFG();
+  doLiveAnalysis();
+  setUpLiveSetsAndMappings();
 }
 
 CFGFunction::~CFGFunction() {
   for (CFGNode *node : nodes) {
     delete node;
+  }
+
+  for (std::map<Value *, PointerAliasInfo *>::iterator it =
+           pointerInformation.begin();
+       it != pointerInformation.end(); it++) {
+    delete it->second;
   }
 }
 
@@ -39,6 +53,201 @@ CFGNode *CFGFunction::findNodeByBasicBlock(BasicBlock &b) {
       return node;
   }
   return NULL;
+}
+
+void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
+
+  std::set<Value *> unknownSizeAliasPointers;
+  std::set<PHINode *> unknownSizePHINodeAliasPointers;
+  std::set<PHINode *> phis;
+
+  // first identify all allocations and PHINodes and set up their sizes and
+  // aliases
+  for (BasicBlock &B : function) {
+    for (Instruction &I : B) {
+      if (!I.getType()->isPtrOrPtrVectorTy())
+        continue;
+
+      if (AllocaInst *ai = dyn_cast<AllocaInst>(&I)) {
+        pointerInformation[&I] = new AllocationPointerAliasInfo(
+            ConstantInt::get(
+                Type::getInt64Ty(getParentLLVMModule().getContext()),
+                getParentLLVMModule().getDataLayout().getTypeSizeInBits(
+                    ai->getAllocatedType()),
+                false),
+            ConstantInt::get(
+                Type::getInt64Ty(getParentLLVMModule().getContext()),
+                cast<ConstantInt>(ai->getArraySize())
+                    ->getValue()
+                    .getZExtValue(),
+                false),
+            ai);
+      } else if (isAllocationFn(&I, &TLI)) {
+        // TODO this needs to be fixed once dealing with dynamic memory
+        // this function only works on malloc like functions it seems?
+        CallInst *malloc = extractMallocCall(&I, &TLI);
+        pointerInformation[&I] = new AllocationPointerAliasInfo(
+            ConstantInt::get(
+                Type::getInt64Ty(getParentLLVMModule().getContext()),
+                getParentLLVMModule().getDataLayout().getTypeSizeInBits(
+                    getMallocAllocatedType(malloc, &TLI)),
+                false),
+            getMallocArraySize(malloc, getParentLLVMModule().getDataLayout(),
+                               &TLI),
+            malloc);
+      } else if (PHINode *phi = dyn_cast<PHINode>(&I)) {
+        // TODO assuming that the sizeInBits and numElements are 64bit integers
+        PHINode *phiTypeSizeInBits = PHINode::Create(
+            Type::getInt64Ty(getParentLLVMModule().getContext()),
+            phi->getNumIncomingValues(), phi->getName() + ".typeSizeInBits",
+            &I);
+        PHINode *phiNumElements = PHINode::Create(
+            Type::getInt64Ty(getParentLLVMModule().getContext()),
+            phi->getNumIncomingValues(), phi->getName() + ".numElements", &I);
+        // add provisional aliasing for this PHINode
+        // at first only alias to incoming values
+        std::set<Value *> aliasSet;
+        for (unsigned phiIdx = 0; phiIdx < phi->getNumIncomingValues();
+             phiIdx++) {
+          aliasSet.insert(phi->getIncomingValue(phiIdx));
+        }
+        pointerInformation[phi] = new PHINodePointerAliasInfo(
+            phiTypeSizeInBits, phiNumElements, aliasSet);
+        phis.insert(phi);
+        unknownSizePHINodeAliasPointers.insert(phi);
+      } else {
+        unknownSizeAliasPointers.insert(&I);
+      }
+    }
+  }
+
+  // Set up aliasing of non PHINodes
+  while (unknownSizeAliasPointers.size()) {
+    errs() << "unknownSizeAliasPointers " << unknownSizeAliasPointers.size()
+           << "\n";
+    std::set<Value *> pointersToRemove;
+    for (Value *v : unknownSizeAliasPointers) {
+      if (!isa<Instruction>(v)) {
+        errs() << "Live value does not come from an instruction, not supported "
+                  "at the moment\n";
+        exit(1);
+      }
+      Instruction *I = cast<Instruction>(v);
+      switch (I->getOpcode()) {
+      case Instruction::GetElementPtr: {
+        GetElementPtrInst *gep = cast<GetElementPtrInst>(I);
+        Value *pointer = gep->getPointerOperand();
+        std::map<Value *, PointerAliasInfo *>::iterator it =
+            pointerInformation.find(pointer);
+        if (it != pointerInformation.end()) {
+          pointerInformation[I] =
+              new PointerAliasInfo(it->second->getTypeSizeInBits(),
+                                   it->second->getNumElements(), pointer);
+          pointersToRemove.insert(I);
+        }
+
+        break;
+      }
+      case Instruction::BitCast: {
+        BitCastInst *bc = cast<BitCastInst>(I);
+        Value *pointer = bc->getOperand(0);
+        std::map<Value *, PointerAliasInfo *>::iterator it =
+            pointerInformation.find(pointer);
+        if (it != pointerInformation.end()) {
+          pointerInformation[I] =
+              new PointerAliasInfo(it->second->getTypeSizeInBits(),
+                                   it->second->getNumElements(), pointer);
+          pointersToRemove.insert(I);
+        }
+        break;
+      }
+      default: {
+        errs() << "****** ACIIL ********\n";
+        errs() << "Pointer " << *I << " is not supported!\n";
+        exit(-1);
+      }
+      }
+    }
+    for (Value *v : pointersToRemove) {
+      unknownSizeAliasPointers.erase(v);
+    }
+  }
+
+  // Find pointer type size and num elements for PHINodes
+  while (unknownSizePHINodeAliasPointers.size()) {
+    errs() << "unknownSizePHINodeAliasPointers "
+           << unknownSizePHINodeAliasPointers.size() << "\n";
+    std::set<PHINode *> pointersToRemove;
+    for (PHINode *phi : unknownSizePHINodeAliasPointers) {
+      PHINodePointerAliasInfo *phiPAI =
+          (PHINodePointerAliasInfo *)pointerInformation[phi];
+      PHINode *phiTypeSizeInBits = cast<PHINode>(phiPAI->getTypeSizeInBits());
+      PHINode *phiNumElements = cast<PHINode>(phiPAI->getNumElements());
+      bool allPhisAreKnown = true;
+      for (unsigned phiIdx = 0; phiIdx < phi->getNumIncomingValues();
+           phiIdx++) {
+        Value *v = phi->getIncomingValue(phiIdx);
+        BasicBlock *b = phi->getIncomingBlock(phiIdx);
+        if (phiTypeSizeInBits->getBasicBlockIndex(b) == -1 ||
+            phiNumElements->getBasicBlockIndex(b) == -1) {
+          std::map<Value *, PointerAliasInfo *>::iterator it =
+              pointerInformation.find(v);
+          if (it != pointerInformation.end()) {
+            phiTypeSizeInBits->addIncoming(it->second->getTypeSizeInBits(), b);
+            phiNumElements->addIncoming(it->second->getNumElements(), b);
+          } else {
+            allPhisAreKnown = false;
+          }
+        }
+      }
+
+      if (allPhisAreKnown) {
+        pointersToRemove.insert(phi);
+      }
+    }
+    for (PHINode *phi : pointersToRemove) {
+      unknownSizePHINodeAliasPointers.erase(phi);
+    }
+  }
+
+  // Set up alias set for PHINodes
+  bool changed;
+  do {
+    changed = false;
+    for (PHINode *phi : phis) {
+      std::vector<Value *> valuesToAdd;
+      std::vector<Value *> valuesToRemove;
+      PHINodePointerAliasInfo *phiPAI =
+          (PHINodePointerAliasInfo *)pointerInformation[phi];
+      for (Value *alias : phiPAI->getAliasSet()) {
+        if (PHINode *aliasedPhi = dyn_cast<PHINode>(alias)) {
+          for (Value *v : pointerInformation[aliasedPhi]->getAliasSet())
+            if (AA->alias(MemoryLocation(phi), MemoryLocation(v)) !=
+                AliasResult::NoAlias)
+              valuesToAdd.push_back(v);
+          valuesToRemove.push_back(alias);
+        }
+      }
+      for (Value *v : valuesToAdd) {
+        bool added = phiPAI->addAlias(v);
+        if (added) {
+          // errs() << "Added " << *v << " to alias " << *phi << "\n";
+        }
+        changed |= added;
+      }
+      for (Value *v : valuesToRemove) {
+        bool removed = phiPAI->removeAlias(v);
+        if (removed) {
+          // errs() << "Removed " << *v << " to alias " << *phi << "\n";
+        }
+        changed |= removed;
+      }
+    }
+  } while (changed);
+
+  // for (PHINode *phi : phis) {
+  //   pointerInformation[phi]->dump();
+  // }
 }
 
 void CFGFunction::setUpCFG() {
@@ -93,7 +302,6 @@ void CFGFunction::setUpCFG() {
       thisNode->addSuccessor(toNode);
     }
   }
-  doLiveAnalysis();
 }
 
 void CFGFunction::doLiveAnalysis() {
@@ -107,29 +315,28 @@ void CFGFunction::doLiveAnalysis() {
       changed =
           CFGUtils::CFGCopyAllOperands(cfgNode->getIn(), cfgNode->getUse());
       // then insert the (out[n]-def[n])
-      std::vector<CFGOperand> outDefDiff;
-      for (CFGOperand op_out : cfgNode->getOut()) {
+      std::vector<CFGUse> outDefDiff;
+      for (CFGUse use_out : cfgNode->getOut()) {
         // if element from out is not in def
-        if (cfgNode->getDef().find(op_out) == cfgNode->getDef().end()) {
+        if (cfgNode->getDef().find(use_out.getValue()) ==
+            cfgNode->getDef().end()) {
           // add it and update the changed flag accordingly
-          changed |= CFGUtils::CFGAddToSet(cfgNode->getIn(), op_out);
+          changed |= CFGUtils::CFGAddToSet(cfgNode->getIn(), use_out);
         }
       }
 
       // out[n] = union of in[s] for all successors s of n
       for (CFGNode *s : cfgNode->getSuccessors()) {
-        for (CFGOperand op : s->getIn()) {
-          if ((op.isFromPHI() &&
-               &cfgNode->getLLVMBasicBlock() ==
-                   op.getSourcePHIBlock()) // if this operand is used by a phi
-                                           // instruction and is form this block
-              || !op.isFromPHI())          // or it's not used by phi
-          {
-            // not sure if this is needed
-            // but it removes the fact that the variable is from the phi node
+        for (CFGUse use : s->getIn()) {
+          // if this operand is used by a phi instruction and is form this block
+          // or this is not a PHI use, then add it to out
+          if ((use.getUseType() == CFGUseType::PHIOnly &&
+               &cfgNode->getLLVMBasicBlock() == use.getSourcePHIBlock()) ||
+              use.getUseType() != CFGUseType::PHIOnly) {
+            // remove the fact that the variable is from the phi node
             // when it is propagating
-            CFGOperand op_clear = CFGOperand(op.getValue());
-            changed |= CFGUtils::CFGAddToSet(cfgNode->getOut(), op_clear);
+            CFGUse use_clear = CFGUse(use.getValue());
+            changed |= CFGUtils::CFGAddToSet(cfgNode->getOut(), use_clear);
           }
         }
       }
@@ -137,14 +344,20 @@ void CFGFunction::doLiveAnalysis() {
       converged &= !changed;
     }
   } while (!converged);
+}
+
+void CFGFunction::setUpLiveSetsAndMappings() {
   // set up the live sets for nodes and mappings
   for (CFGNode *cfgNode : nodes) {
-    for (CFGOperand op : cfgNode->getIn()) {
-      cfgNode->getLiveValues().insert(op.getValue());
-      cfgNode->addLiveMapping(op.getValue(), op.getValue());
+    for (CFGUse use : cfgNode->getIn()) {
+      Value *v = use.getValue();
+      cfgNode->getLiveValues().insert(use);
+      cfgNode->addLiveMapping(v, v);
     }
-    for (CFGOperand op : cfgNode->getDef())
-      cfgNode->addLiveMapping(op.getValue(), op.getValue());
+    for (CFGUse use : cfgNode->getDef()) {
+      Value *v = use.getValue();
+      cfgNode->addLiveMapping(v, v);
+    }
   }
 }
 
@@ -165,9 +378,9 @@ CFGNode &CFGFunction::addCheckpointNode(BasicBlock &b, CFGNode &nodeForCR) {
   // add the node
   addNode(b, false);
   // copy the live set and set up mapping
-  for (Value *v : nodeForCR.getLiveValues()) {
-    nodes.back()->getLiveValues().insert(v);
-    nodes.back()->addLiveMapping(v, v);
+  for (CFGUse use : nodeForCR.getLiveValues()) {
+    nodes.back()->getLiveValues().insert(use);
+    nodes.back()->addLiveMapping(use.getValue(), use.getValue());
   }
   return *nodes.back();
 }
@@ -177,8 +390,8 @@ CFGNode &CFGFunction::addRestartNode(BasicBlock &b, CFGNode &nodeForCR) {
   addNode(b, false);
   // nothing is live before the restart block so don't copy the in set
   // set up the mapping
-  for (Value *op : nodeForCR.getLiveValues())
-    nodes.back()->addLiveMapping(op, op);
+  for (CFGUse use : nodeForCR.getLiveValues())
+    nodes.back()->addLiveMapping(use.getValue(), use.getValue());
   return *nodes.back();
 }
 
@@ -186,8 +399,8 @@ CFGNode &CFGFunction::addNoCREntryNode(BasicBlock &b) {
   // add the node
   addNode(b, false);
   // set up the mapping for all variables that are *defined*
-  for (CFGOperand op : nodes.back()->getDef())
-    nodes.back()->addLiveMapping(op.getValue(), op.getValue());
+  for (Value *op : nodes.back()->getDef())
+    nodes.back()->addLiveMapping(op, op);
   return *nodes.back();
 }
 
@@ -196,3 +409,7 @@ ACIiLAllocaManager &CFGFunction::getAllocManager() { return am; }
 CFGModule &CFGFunction::getParentModule() { return module; }
 
 Module &CFGFunction::getParentLLVMModule() { return module.getLLVMModule(); }
+
+std::map<Value *, PointerAliasInfo *> &CFGFunction::getPointerInformation() {
+  return pointerInformation;
+}
