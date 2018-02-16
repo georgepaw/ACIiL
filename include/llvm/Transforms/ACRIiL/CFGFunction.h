@@ -1,6 +1,6 @@
 
-#ifndef LLVM_TRANSFORMS_ACIIL_CFGFUNCTION_H
-#define LLVM_TRANSFORMS_ACIIL_CFGFUNCTION_H
+#ifndef LLVM_TRANSFORMS_ACRIIL_CFGFUNCTION_H
+#define LLVM_TRANSFORMS_ACRIIL_CFGFUNCTION_H
 
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -8,9 +8,9 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
-#include "llvm/Transforms/ACIiL/ACRIiLPointerAlias.h"
-#include "llvm/Transforms/ACIiL/CFGNode.h"
+#include "llvm/Transforms/ACRIiL/ACRIiLAllocaManager.h"
+#include "llvm/Transforms/ACRIiL/ACRIiLPointerAlias.h"
+#include "llvm/Transforms/ACRIiL/CFGNode.h"
 
 #include <map>
 #include <set>
@@ -31,7 +31,7 @@ public:
   CFGNode &addRestartNode(BasicBlock &b, CFGNode &nodeForCR);
   CFGNode &addNoCREntryNode(BasicBlock &b);
   CFGNode *findNodeByBasicBlock(BasicBlock &b);
-  ACIiLAllocaManager &getAllocManager();
+  ACRIiLAllocaManager &getAllocManager();
   CFGModule &getParentModule();
   Module &getParentLLVMModule();
   std::map<Value *, PointerAliasInfo *> &getPointerInformation();
@@ -44,7 +44,7 @@ private:
   void setUpLiveSetsAndMappings();
   Function &function;
   std::vector<CFGNode *> nodes;
-  ACIiLAllocaManager am;
+  ACRIiLAllocaManager am;
   CFGModule &module;
   std::map<Value *, PointerAliasInfo *> pointerInformation;
 };

@@ -28,4 +28,4 @@ jacobi: jacobi.o
 cr: checkpoint.bc restart.bc
 
 clean:
-	rm -rf .aciil_chkpnt-*
+	rm -rf .acriil_chkpnt-*

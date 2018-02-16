@@ -17,9 +17,9 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/ACIiL.h"
-#include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
-#include "llvm/Transforms/ACIiL/CFGModule.h"
+#include "llvm/Transforms/ACRIiL.h"
+#include "llvm/Transforms/ACRIiL/ACRIiLAllocaManager.h"
+#include "llvm/Transforms/ACRIiL/CFGModule.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -33,9 +33,9 @@
 using namespace llvm;
 
 namespace {
-struct ACIiLPass : public ModulePass {
+struct ACRIiLPass : public ModulePass {
   static char ID;
-  ACIiLPass() : ModulePass(ID) {}
+  ACRIiLPass() : ModulePass(ID) {}
 
   struct CheckpointRestartBlockHelper {
     CFGNode &node;
@@ -60,15 +60,15 @@ struct ACIiLPass : public ModulePass {
     }
   };
 
-  Function *aciilCheckpointSetup;
-  Function *aciilCheckpointStart;
-  Function *aciilCheckpointPointer;
-  Function *aciilCheckpointAlias;
-  Function *aciilCheckpointFinish;
-  Function *aciilRestartGetLabel;
-  Function *aciilRestartReadPointerFromCheckpoint;
-  Function *aciilRestartReadAliasFromCheckpoint;
-  Function *aciilRestartFinish;
+  Function *acriilCheckpointSetup;
+  Function *acriilCheckpointStart;
+  Function *acriilCheckpointPointer;
+  Function *acriilCheckpointAlias;
+  Function *acriilCheckpointFinish;
+  Function *acriilRestartGetLabel;
+  Function *acriilRestartReadPointerFromCheckpoint;
+  Function *acriilRestartReadAliasFromCheckpoint;
+  Function *acriilRestartFinish;
 
   // commonly used types
   IntegerType *i64Type;
@@ -116,27 +116,27 @@ struct ACIiLPass : public ModulePass {
     }
 
     // load the checkpointing functions
-    aciilCheckpointSetup = M.getFunction("__aciil_checkpoint_setup");
-    aciilCheckpointStart = M.getFunction("__aciil_checkpoint_start");
-    aciilCheckpointPointer = M.getFunction("__aciil_checkpoint_pointer");
-    aciilCheckpointAlias = M.getFunction("__aciil_checkpoint_alias");
-    aciilCheckpointFinish = M.getFunction("__aciil_checkpoint_finish");
-    if (!aciilCheckpointSetup || !aciilCheckpointStart ||
-        !aciilCheckpointPointer || !aciilCheckpointFinish ||
-        !aciilCheckpointAlias) {
+    acriilCheckpointSetup = M.getFunction("__acriil_checkpoint_setup");
+    acriilCheckpointStart = M.getFunction("__acriil_checkpoint_start");
+    acriilCheckpointPointer = M.getFunction("__acriil_checkpoint_pointer");
+    acriilCheckpointAlias = M.getFunction("__acriil_checkpoint_alias");
+    acriilCheckpointFinish = M.getFunction("__acriil_checkpoint_finish");
+    if (!acriilCheckpointSetup || !acriilCheckpointStart ||
+        !acriilCheckpointPointer || !acriilCheckpointFinish ||
+        !acriilCheckpointAlias) {
       errs() << "could not load the checkpointing functions, checkpointing "
                 "will not be added\n";
       return false;
     }
     // load the restart functions
-    aciilRestartGetLabel = M.getFunction("__aciil_restart_get_label");
-    aciilRestartReadPointerFromCheckpoint =
-        M.getFunction("__aciil_restart_read_pointer_from_checkpoint");
-    aciilRestartReadAliasFromCheckpoint =
-        M.getFunction("__aciil_restart_read_alias_from_checkpoint");
-    aciilRestartFinish = M.getFunction("__aciil_restart_finish");
-    if (!aciilRestartGetLabel || !aciilRestartReadPointerFromCheckpoint ||
-        !aciilRestartReadAliasFromCheckpoint || !aciilRestartFinish) {
+    acriilRestartGetLabel = M.getFunction("__acriil_restart_get_label");
+    acriilRestartReadPointerFromCheckpoint =
+        M.getFunction("__acriil_restart_read_pointer_from_checkpoint");
+    acriilRestartReadAliasFromCheckpoint =
+        M.getFunction("__acriil_restart_read_alias_from_checkpoint");
+    acriilRestartFinish = M.getFunction("__acriil_restart_finish");
+    if (!acriilRestartGetLabel || !acriilRestartReadPointerFromCheckpoint ||
+        !acriilRestartReadAliasFromCheckpoint || !acriilRestartFinish) {
       errs() << "could not load the restarting functions, checkpointing will "
                 "not be added\n";
       return false;
@@ -275,10 +275,10 @@ struct ACIiLPass : public ModulePass {
     std::vector<Value *> emptyArgs;
     IRBuilder<> builder(&entry);
     // insert the call that gets the label for the restart
-    CallInst *ciGetLabel = builder.CreateCall(aciilRestartGetLabel, emptyArgs);
+    CallInst *ciGetLabel = builder.CreateCall(acriilRestartGetLabel, emptyArgs);
 
     // insert the checkpoint set up call
-    builder.CreateCall(aciilCheckpointSetup, emptyArgs);
+    builder.CreateCall(acriilCheckpointSetup, emptyArgs);
 
     // insert the switch with the default being carry on as if not checkpoint
     // happened
@@ -323,17 +323,17 @@ struct ACIiLPass : public ModulePass {
       args.push_back(ConstantInt::get(i64Type, CRBH.nextCheckpointLabel, true));
       builderCheckpointBlock.SetInsertPoint(
           &CRBH.checkpointNode.getLLVMBasicBlock().front());
-      builderCheckpointBlock.CreateCall(aciilCheckpointStart, args);
+      builderCheckpointBlock.CreateCall(acriilCheckpointStart, args);
     }
     // add a checkpoint clean up call at the end
     {
       std::vector<Value *> args;
       builderCheckpointBlock.SetInsertPoint(
           &CRBH.checkpointNode.getLLVMBasicBlock().back());
-      builderCheckpointBlock.CreateCall(aciilCheckpointFinish, args);
+      builderCheckpointBlock.CreateCall(acriilCheckpointFinish, args);
       builderRestartBlock.SetInsertPoint(
           &CRBH.restartNode.getLLVMBasicBlock().back());
-      builderRestartBlock.CreateCall(aciilRestartFinish, args);
+      builderRestartBlock.CreateCall(acriilRestartFinish, args);
     }
   }
 
@@ -528,7 +528,7 @@ struct ACIiLPass : public ModulePass {
     checkpointArgs.push_back(typeSizeInBits);
     checkpointArgs.push_back(numElements);
     checkpointArgs.push_back(bc);
-    builder.CreateCall(aciilCheckpointPointer, checkpointArgs);
+    builder.CreateCall(acriilCheckpointPointer, checkpointArgs);
   }
 
   void addCheckpointAliasInstructionsToBlock(Value *valueToCheckpoint,
@@ -556,7 +556,7 @@ struct ACIiLPass : public ModulePass {
           ConstantInt::get(i64Type, CRBH.checkpointedToIndexMap[alias], false));
       checkpointArgs.push_back(aliasBC);
     }
-    builder.CreateCall(aciilCheckpointAlias, checkpointArgs);
+    builder.CreateCall(acriilCheckpointAlias, checkpointArgs);
   }
 
   void addRestorePointerInstructionsToBlock(Value *valueToRestore,
@@ -571,7 +571,7 @@ struct ACIiLPass : public ModulePass {
     restartArgs.push_back(numElements);
     restartArgs.push_back(bc);
 
-    builder.CreateCall(aciilRestartReadPointerFromCheckpoint, restartArgs);
+    builder.CreateCall(acriilRestartReadPointerFromCheckpoint, restartArgs);
   }
 
   Value *addRestoreAliasInstructionsToBlock(Value *typeSizeInBits,
@@ -581,7 +581,8 @@ struct ACIiLPass : public ModulePass {
     restartArgs.push_back(typeSizeInBits);
     restartArgs.push_back(numElements);
 
-    return builder.CreateCall(aciilRestartReadAliasFromCheckpoint, restartArgs);
+    return builder.CreateCall(acriilRestartReadAliasFromCheckpoint,
+                              restartArgs);
   }
 
   void fixDominance(CFGFunction &cfgFunction) {
@@ -700,28 +701,29 @@ struct ACIiLPass : public ModulePass {
 };
 } // namespace
 
-INITIALIZE_PASS_BEGIN(ACIiLPass, "ACIiL",
+INITIALIZE_PASS_BEGIN(ACRIiLPass, "ACRIiL",
                       "Automatic Checkpoint/Restart Insertion Pass", true, true)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
-INITIALIZE_PASS_END(ACIiLPass, "ACIiL",
+INITIALIZE_PASS_END(ACRIiLPass, "ACRIiL",
                     "Automatic Checkpoint/Restart Insertion Pass", true, true)
 
-char ACIiLPass::ID = 0;
+char ACRIiLPass::ID = 0;
 
-// static void registerACIiLPass(const PassManagerBuilder &,
+// static void registerACRIiLPass(const PassManagerBuilder &,
 //                          legacy::PassManagerBase &PM) {
-//   PM.add(new ACIiLPass());
+//   PM.add(new ACRIiLPass());
 // }
 
-ModulePass *llvm::createACIiLLinkingPass() {
-  errs() << "Adding ACIiLPass!\n";
-  return new ACIiLPass();
+ModulePass *llvm::createACRIiLLinkingPass() {
+  errs() << "Adding ACRIiLPass!\n";
+  return new ACRIiLPass();
 }
 
 // static RegisterStandardPasses
-//     register_pass_O(PassManagerBuilder::EP_OptimizerLast, registerACIiLPass);
+//     register_pass_O(PassManagerBuilder::EP_OptimizerLast,
+//     registerACRIiLPass);
 
 // static RegisterStandardPasses
 //     register_pass_O0(PassManagerBuilder::EP_EnabledOnOptLevel0,
-//     registerACIiLPass);
+//     registerACRIiLPass);

@@ -1,13 +1,13 @@
 
-#ifndef LLVM_TRANSFORMS_ACIIL_CFGMODULE_H
-#define LLVM_TRANSFORMS_ACIIL_CFGMODULE_H
+#ifndef LLVM_TRANSFORMS_ACRIIL_CFGMODULE_H
+#define LLVM_TRANSFORMS_ACRIIL_CFGMODULE_H
 
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
-#include "llvm/Transforms/ACIiL/CFGFunction.h"
+#include "llvm/Transforms/ACRIiL/CFGFunction.h"
 
 #include <map>
 

@@ -1,4 +1,4 @@
-#include "llvm/Transforms/ACIiL/CFGFunction.h"
+#include "llvm/Transforms/ACRIiL/CFGFunction.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -7,12 +7,12 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
-#include "llvm/Transforms/ACIiL/ACRIiLPointerAlias.h"
-#include "llvm/Transforms/ACIiL/CFGModule.h"
-#include "llvm/Transforms/ACIiL/CFGNode.h"
-#include "llvm/Transforms/ACIiL/CFGUse.h"
-#include "llvm/Transforms/ACIiL/CFGUtils.h"
+#include "llvm/Transforms/ACRIiL/ACRIiLAllocaManager.h"
+#include "llvm/Transforms/ACRIiL/ACRIiLPointerAlias.h"
+#include "llvm/Transforms/ACRIiL/CFGModule.h"
+#include "llvm/Transforms/ACRIiL/CFGNode.h"
+#include "llvm/Transforms/ACRIiL/CFGUse.h"
+#include "llvm/Transforms/ACRIiL/CFGUtils.h"
 
 #include <map>
 #include <set>
@@ -162,7 +162,7 @@ void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
         break;
       }
       default: {
-        errs() << "****** ACIIL ********\n";
+        errs() << "****** ACRIiL ********\n";
         errs() << "Pointer " << *I << " is not supported!\n";
         exit(-1);
       }
@@ -404,7 +404,7 @@ CFGNode &CFGFunction::addNoCREntryNode(BasicBlock &b) {
   return *nodes.back();
 }
 
-ACIiLAllocaManager &CFGFunction::getAllocManager() { return am; }
+ACRIiLAllocaManager &CFGFunction::getAllocManager() { return am; }
 
 CFGModule &CFGFunction::getParentModule() { return module; }
 

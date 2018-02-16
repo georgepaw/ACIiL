@@ -1,9 +1,9 @@
-#include "llvm/Transforms/ACIiL/ACIiLAllocaManager.h"
+#include "llvm/Transforms/ACRIiL/ACRIiLAllocaManager.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/ACIiL/CFGFunction.h"
+#include "llvm/Transforms/ACRIiL/CFGFunction.h"
 
 #include <map>
 #include <set>
@@ -11,9 +11,9 @@
 
 using namespace llvm;
 
-ACIiLAllocaManager::ACIiLAllocaManager(CFGFunction &f) : function(f) {}
+ACRIiLAllocaManager::ACRIiLAllocaManager(CFGFunction &f) : function(f) {}
 
-AllocaInst *ACIiLAllocaManager::getAlloca(Type *type) {
+AllocaInst *ACRIiLAllocaManager::getAlloca(Type *type) {
   AllocaInst *ai;
   if (unusedAllocas[type].size() > 0) {
     ai = *unusedAllocas[type].begin();
@@ -28,7 +28,7 @@ AllocaInst *ACIiLAllocaManager::getAlloca(Type *type) {
   return ai;
 }
 
-void ACIiLAllocaManager::releaseAlloca(AllocaInst *ai) {
+void ACRIiLAllocaManager::releaseAlloca(AllocaInst *ai) {
   if (allocas[ai->getAllocatedType()].count(ai)) {
     unusedAllocas[ai->getAllocatedType()].insert(ai);
   }

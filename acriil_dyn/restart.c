@@ -7,11 +7,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-char *__aciil_checkpoint_path;
-int64_t __aciil_restart_checkpoint_file_counter = 0;
-uint8_t **__aciil_pointer_alias_address;
+char *__acriil_checkpoint_path;
+int64_t __acriil_restart_checkpoint_file_counter = 0;
+uint8_t **__acriil_pointer_alias_address;
 
-uint64_t __aciil_get_checkpoint_before(char *base_path, int64_t epoch_before) {
+uint64_t __acriil_get_checkpoint_before(char *base_path, int64_t epoch_before) {
 
   char *dir = ".";
   uint64_t most_recent_epoch = 0;
@@ -31,7 +31,7 @@ uint64_t __aciil_get_checkpoint_before(char *base_path, int64_t epoch_before) {
       /* Found a directory, but ignore . and .. */
       if (strcmp(".", entry->d_name) == 0 || strcmp("..", entry->d_name) == 0)
         continue;
-      if (strstr(entry->d_name, ".aciil_chkpnt-")) {
+      if (strstr(entry->d_name, ".acriil_chkpnt-")) {
         char *end;
         uint64_t epoch =
             strtoull(entry->d_name + 14, // 14 is strlen of the prefix
@@ -52,9 +52,9 @@ uint64_t __aciil_get_checkpoint_before(char *base_path, int64_t epoch_before) {
   return most_recent_epoch;
 }
 
-int64_t __aciil_get_checkpoint_folder_before(char *checkpoint_dir,
-                                             char *base_path,
-                                             int64_t checkpoint_before) {
+int64_t __acriil_get_checkpoint_folder_before(char *checkpoint_dir,
+                                              char *base_path,
+                                              int64_t checkpoint_before) {
   DIR *dp;
   struct dirent *entry;
   struct stat statbuf;
@@ -87,11 +87,12 @@ int64_t __aciil_get_checkpoint_folder_before(char *checkpoint_dir,
   return most_recent_checkpoint;
 }
 
-uint8_t __aciil_checkpoint_valid(int64_t num_variables) {
+uint8_t __acriil_checkpoint_valid(int64_t num_variables) {
   for (int64_t i = 0; i < num_variables; i++) {
     char file_name[1024];
     sprintf(file_name, "%" PRIi64, i);
-    char *file = __aciil_merge_char_arrays(__aciil_checkpoint_path, file_name);
+    char *file =
+        __acriil_merge_char_arrays(__acriil_checkpoint_path, file_name);
     FILE *fp;
     fp = fopen(file, "r");
     if (!fp)
@@ -155,7 +156,7 @@ uint8_t __aciil_checkpoint_valid(int64_t num_variables) {
   return 1;
 }
 
-int64_t __aciil_restart_get_label() {
+int64_t __acriil_restart_get_label() {
   char base_path[1024];
   char checkpoint_dir[1024];
   uint64_t epoch = UINT64_MAX;
@@ -166,7 +167,7 @@ int64_t __aciil_restart_get_label() {
   int64_t num_variables = -1;
   while (1) // todo fix this
   {
-    epoch = __aciil_get_checkpoint_before(base_path, epoch);
+    epoch = __acriil_get_checkpoint_before(base_path, epoch);
     if (epoch == 0)
       return -1; // no checkpoints to use
     printf("Most recent epoch is %s\n", base_path);
@@ -176,23 +177,23 @@ int64_t __aciil_restart_get_label() {
 
     int64_t most_recent_checkpoint = INT64_MAX;
     while (1) {
-      most_recent_checkpoint = __aciil_get_checkpoint_folder_before(
+      most_recent_checkpoint = __acriil_get_checkpoint_folder_before(
           checkpoint_dir, base_path, most_recent_checkpoint);
       if (most_recent_checkpoint < 0)
         break;
 
-      __aciil_checkpoint_path =
-          __aciil_merge_char_arrays(base_path, checkpoint_dir);
+      __acriil_checkpoint_path =
+          __acriil_merge_char_arrays(base_path, checkpoint_dir);
 
-      if (!__aciil_checkpoint_path) {
+      if (!__acriil_checkpoint_path) {
         return -1;
       }
-      printf("Checkpoint path is %s\n", __aciil_checkpoint_path);
+      printf("Checkpoint path is %s\n", __acriil_checkpoint_path);
 
       // open the info file which stores the info about the checkpoint
       FILE *fp;
       char *info_file_path =
-          __aciil_merge_char_arrays(__aciil_checkpoint_path, "info");
+          __acriil_merge_char_arrays(__acriil_checkpoint_path, "info");
       if (!info_file_path) {
         continue;
       }
@@ -217,11 +218,11 @@ int64_t __aciil_restart_get_label() {
 
       fclose(fp);
       free(info_file_path);
-      __aciil_restart_checkpoint_file_counter = 0;
-      if (label >= 0 && __aciil_checkpoint_valid(num_variables)) {
-        printf("*** ACIIL - Using checkpoint with label %" PRIi64 " ***\n",
+      __acriil_restart_checkpoint_file_counter = 0;
+      if (label >= 0 && __acriil_checkpoint_valid(num_variables)) {
+        printf("*** ACRIiL - Using checkpoint with label %" PRIi64 " ***\n",
                label);
-        __aciil_pointer_alias_address =
+        __acriil_pointer_alias_address =
             malloc(sizeof(uint8_t **) * num_variables);
         return label;
       } else {
@@ -235,12 +236,12 @@ int64_t __aciil_restart_get_label() {
   return -1;
 }
 
-void __aciil_restart_read_pointer_from_checkpoint(uint64_t size_bits,
-                                                  uint64_t num_elements,
-                                                  uint8_t *data) {
+void __acriil_restart_read_pointer_from_checkpoint(uint64_t size_bits,
+                                                   uint64_t num_elements,
+                                                   uint8_t *data) {
   char file_name[1024];
-  sprintf(file_name, "%" PRIi64, __aciil_restart_checkpoint_file_counter);
-  char *file = __aciil_merge_char_arrays(__aciil_checkpoint_path, file_name);
+  sprintf(file_name, "%" PRIi64, __acriil_restart_checkpoint_file_counter);
+  char *file = __acriil_merge_char_arrays(__acriil_checkpoint_path, file_name);
   FILE *fp;
   fp = fopen(file, "r");
   // read the header
@@ -293,17 +294,18 @@ void __aciil_restart_read_pointer_from_checkpoint(uint64_t size_bits,
   }
   fclose(fp);
   free(file);
-  __aciil_pointer_alias_address[__aciil_restart_checkpoint_file_counter] = data;
-  printf("*** ACIIL - restored element %" PRIu64 " ***\n",
-         __aciil_restart_checkpoint_file_counter);
-  __aciil_restart_checkpoint_file_counter++;
+  __acriil_pointer_alias_address[__acriil_restart_checkpoint_file_counter] =
+      data;
+  printf("*** ACRIiL - restored element %" PRIu64 " ***\n",
+         __acriil_restart_checkpoint_file_counter);
+  __acriil_restart_checkpoint_file_counter++;
 }
 
-uint8_t *__aciil_restart_read_alias_from_checkpoint(uint64_t size_bits,
-                                                    uint64_t num_elements) {
+uint8_t *__acriil_restart_read_alias_from_checkpoint(uint64_t size_bits,
+                                                     uint64_t num_elements) {
   char file_name[1024];
-  sprintf(file_name, "%" PRIi64, __aciil_restart_checkpoint_file_counter);
-  char *file = __aciil_merge_char_arrays(__aciil_checkpoint_path, file_name);
+  sprintf(file_name, "%" PRIi64, __acriil_restart_checkpoint_file_counter);
+  char *file = __acriil_merge_char_arrays(__acriil_checkpoint_path, file_name);
   FILE *fp;
   fp = fopen(file, "r");
   // read the header
@@ -358,12 +360,12 @@ uint8_t *__aciil_restart_read_alias_from_checkpoint(uint64_t size_bits,
   free(file);
 
   uint8_t *out =
-      __aciil_pointer_alias_address[__aciil_restart_checkpoint_file_counter] =
-          __aciil_pointer_alias_address[aliases_to];
-  printf("*** ACIIL - restored element %" PRIu64 " ***\n",
-         __aciil_restart_checkpoint_file_counter);
-  __aciil_restart_checkpoint_file_counter++;
+      __acriil_pointer_alias_address[__acriil_restart_checkpoint_file_counter] =
+          __acriil_pointer_alias_address[aliases_to];
+  printf("*** ACRIiL - restored element %" PRIu64 " ***\n",
+         __acriil_restart_checkpoint_file_counter);
+  __acriil_restart_checkpoint_file_counter++;
   return out;
 }
 
-void __aciil_restart_finish() { free(__aciil_pointer_alias_address); }
+void __acriil_restart_finish() { free(__acriil_pointer_alias_address); }

@@ -1,6 +1,6 @@
 
-#ifndef LLVM_TRANSFORMS_ACIIL_ACIILALLOCAMANAGER_H
-#define LLVM_TRANSFORMS_ACIIL_ACIILALLOCAMANAGER_H
+#ifndef LLVM_TRANSFORMS_ACRIIL_ACRIILALLOCAMANAGER_H
+#define LLVM_TRANSFORMS_ACRIIL_ACRIILALLOCAMANAGER_H
 
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
@@ -12,9 +12,9 @@
 
 namespace llvm {
 class CFGFunction;
-class ACIiLAllocaManager {
+class ACRIiLAllocaManager {
 public:
-  ACIiLAllocaManager(CFGFunction &f);
+  ACRIiLAllocaManager(CFGFunction &f);
   AllocaInst *getAlloca(Type *type);
   void releaseAlloca(AllocaInst *ai);
 

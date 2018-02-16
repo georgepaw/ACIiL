@@ -1,8 +1,8 @@
 
-#ifndef LLVM_TRANSFORMS_ACIIL_CFGUTILS_H
-#define LLVM_TRANSFORMS_ACIIL_CFGUTILS_H
+#ifndef LLVM_TRANSFORMS_ACRIIL_CFGUTILS_H
+#define LLVM_TRANSFORMS_ACRIIL_CFGUTILS_H
 
-#include "llvm/Transforms/ACIiL/CFGUse.h"
+#include "llvm/Transforms/ACRIiL/CFGUse.h"
 
 #include <map>
 #include <set>
