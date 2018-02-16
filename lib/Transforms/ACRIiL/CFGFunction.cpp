@@ -261,21 +261,10 @@ void CFGFunction::setUpCFG() {
     //"There must be no non-phi instructions between the start of a basic block
     // and the PHI instructions: i.e. PHI instructions must be first in a basic
     // block."
-    // So to split the block find the last phi instruction and split the block.
-
-    // to find the last phi instruction
-    // start at the first instruction, it it's not phi then this block does not
-    // need to be splitted
-    if (!isa<PHINode>(B.front()))
-      continue;
-    bool foundSplit = false;
-    for (BasicBlock::iterator start = B.begin()++, end = B.end();
-         start != end && !foundSplit; start++) {
-      if (!isa<PHINode>(start)) {
-        splitLocations.push_back(&*start);
-        foundSplit = true;
-      }
-    }
+    // So to split the block get the first non-phi instruction.
+    Instruction *firstNonPHI = B.getFirstNonPHI();
+    if (firstNonPHI != &B.front())
+      splitLocations.push_back(firstNonPHI);
   }
 
   std::set<BasicBlock *> phiNodes;
