@@ -19,6 +19,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/ACRIiL.h"
 #include "llvm/Transforms/ACRIiL/ACRIiLAllocaManager.h"
+#include "llvm/Transforms/ACRIiL/ACRIiLUtils.h"
 #include "llvm/Transforms/ACRIiL/CFGModule.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
@@ -100,6 +101,10 @@ struct ACRIiLPass : public ModulePass {
     i8Type = IntegerType::getInt8Ty(M.getContext());
     i8PType = PointerType::get(i8Type, /*address space*/ 0);
 
+#if SHOW_CFG == 1
+    mainFunction->viewCFG();
+#endif
+
     // create a CFG module with live analysis and split phi nodes correctly
     CFGModule cfgModule(M, *mainFunction, this);
 
@@ -141,7 +146,6 @@ struct ACRIiLPass : public ModulePass {
                 "not be added\n";
       return false;
     }
-
     // get the main cfg
     CFGFunction &cfgMain = cfgModule.getEntryFunction();
     bool changed = addCheckpointsToFunction(cfgMain);
@@ -149,9 +153,6 @@ struct ACRIiLPass : public ModulePass {
   }
 
   bool addCheckpointsToFunction(CFGFunction &cfgFunction) {
-#if SHOW_CFG == 1
-    cfgFunction.getLLVMFunction().viewCFG();
-#endif
     std::vector<CFGNode *> nodesToCheckpoint;
     // insert the checkpoint and restart blocks
     // the blocks are empty at first, just with correct branching
@@ -347,8 +348,8 @@ struct ACRIiLPass : public ModulePass {
                                     IRBuilder<> &builderRestartBlock) {
     Value *restoreLiveValue = nullptr;
     // TODO at the moment assume that live values are instructions or constants
-    if (Instruction *i = dyn_cast<Instruction>(liveValue)) {
-      if (i->getType()->isPtrOrPtrVectorTy()) {
+    if (ACRIiLUtils::isCheckpointableType(liveValue)) {
+      if (liveValue->getType()->isPtrOrPtrVectorTy()) {
         restoreLiveValue = checkpointRestoreLiveValuePointer(
             liveValue, CRBH, builderCheckpointBlock, builderRestartBlock);
 
@@ -393,7 +394,7 @@ struct ACRIiLPass : public ModulePass {
                                    builderCheckpointBlock, builderRestartBlock);
     // checkpoint pointer until this base condition
     for (Value *alias : PAI->getAliasSet()) {
-      if (liveValue != alias && isa<Instruction>(alias)) {
+      if (liveValue != alias && ACRIiLUtils::isCheckpointableType(alias)) {
         checkpointRestoreLiveValue(alias, CRBH, builderCheckpointBlock,
                                    builderRestartBlock);
       }
@@ -406,75 +407,96 @@ struct ACRIiLPass : public ModulePass {
     }
 
     Instruction *i = cast<Instruction>(liveValue);
-
-    switch (i->getOpcode()) {
-    case Instruction::Alloca: {
-      AllocaInst *aiLive = cast<AllocaInst>(i);
+    TargetLibraryInfo &TLI =
+        getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
+    if (isAllocationFn(i, &TLI)) {
+      CallInst *mallocLive = extractMallocCall(i, &TLI);
       // checkpoint
-      addCheckpointPointerInstructionsToBlock(aiLive, PAI->getTypeSizeInBits(),
-                                              PAI->getNumElements(),
-                                              builderCheckpointBlock);
+      addCheckpointPointerInstructionsToBlock(
+          mallocLive, PAI->getTypeSizeInBits(), PAI->getNumElements(),
+          builderCheckpointBlock);
       // restore
-      // clone the allocating instruction into restore block
-      AllocaInst *aiRestore = cast<AllocaInst>(aiLive->clone());
-      builderRestartBlock.Insert(aiRestore, aiLive->getName() + ".restart");
-      addRestorePointerInstructionsToBlock(aiRestore, restoreTypeSizeInBits,
+      // clone the malloc instruction into restore block
+      CallInst *mallocRestore = cast<CallInst>(mallocLive->clone());
+      // use the restored malloc size as an argument
+      mallocRestore->setArgOperand(0, restoreNumElements);
+      builderRestartBlock.Insert(mallocRestore,
+                                 mallocLive->getName() + ".restart");
+      addRestorePointerInstructionsToBlock(mallocRestore, restoreTypeSizeInBits,
                                            restoreNumElements,
                                            builderRestartBlock);
-      restoreLiveValue = aiRestore;
-      CRBH.addToCheckpointMap(liveValue, aiRestore);
-      break;
-    }
-    case Instruction::PHI: {
-      PHINode *phiLive = cast<PHINode>(i);
-      // checkpoint
-      addCheckpointAliasInstructionsToBlock(phiLive, PAI, CRBH,
-                                            builderCheckpointBlock);
-      // restore
-      Value *restoredBC = addRestoreAliasInstructionsToBlock(
-          restoreTypeSizeInBits, restoreNumElements, builderRestartBlock);
-      Value *restored = builderRestartBlock.CreateBitCast(
-          restoredBC, phiLive->getType(), phiLive->getName() + ".restart");
-      restoreLiveValue = restored;
-      CRBH.addToCheckpointMap(liveValue, restored);
-      break;
-    }
-    case Instruction::GetElementPtr: {
-      GetElementPtrInst *gepLive = cast<GetElementPtrInst>(i);
-      // checkpoint
-      addCheckpointAliasInstructionsToBlock(gepLive, PAI, CRBH,
-                                            builderCheckpointBlock);
-      // restore
-      Value *restoredBC = addRestoreAliasInstructionsToBlock(
-          restoreTypeSizeInBits, restoreNumElements, builderRestartBlock);
-      Value *restored = builderRestartBlock.CreateBitCast(
-          restoredBC, gepLive->getType(), gepLive->getName() + ".restart");
-      restoreLiveValue = restored;
-      CRBH.addToCheckpointMap(liveValue, restored);
-      break;
-    }
-    case Instruction::BitCast: {
-      BitCastInst *bcLive = cast<BitCastInst>(i);
-      // checkpoint
-      addCheckpointAliasInstructionsToBlock(bcLive, PAI, CRBH,
-                                            builderCheckpointBlock);
-      // restore
-      Value *restoredBC = addRestoreAliasInstructionsToBlock(
-          restoreTypeSizeInBits, restoreNumElements, builderRestartBlock);
-      Value *restored = builderRestartBlock.CreateBitCast(
-          restoredBC, bcLive->getType(), bcLive->getName() + ".restart");
-      restoreLiveValue = restored;
-      CRBH.addToCheckpointMap(liveValue, restored);
-      break;
-    }
-    default: {
-      errs() << "****** POINTER BEING CHECKPOINTED AS A SCALAR!!!! ******\n";
-      liveValue->dump();
-      i->getType()->dump();
-      PointerType *pty = cast<PointerType>(i->getType());
-      pty->getElementType()->dump();
-      exit(-1);
-    }
+      restoreLiveValue = mallocRestore;
+      CRBH.addToCheckpointMap(liveValue, mallocRestore);
+    } else {
+      switch (i->getOpcode()) {
+      case Instruction::Alloca: {
+        AllocaInst *aiLive = cast<AllocaInst>(i);
+        // checkpoint
+        addCheckpointPointerInstructionsToBlock(
+            aiLive, PAI->getTypeSizeInBits(), PAI->getNumElements(),
+            builderCheckpointBlock);
+        // restore
+        // clone the allocating instruction into restore block
+        AllocaInst *aiRestore = cast<AllocaInst>(aiLive->clone());
+        builderRestartBlock.Insert(aiRestore, aiLive->getName() + ".restart");
+        addRestorePointerInstructionsToBlock(aiRestore, restoreTypeSizeInBits,
+                                             restoreNumElements,
+                                             builderRestartBlock);
+        restoreLiveValue = aiRestore;
+        CRBH.addToCheckpointMap(liveValue, aiRestore);
+        break;
+      }
+      case Instruction::PHI: {
+        PHINode *phiLive = cast<PHINode>(i);
+        // checkpoint
+        addCheckpointAliasInstructionsToBlock(phiLive, PAI, CRBH,
+                                              builderCheckpointBlock);
+        // restore
+        Value *restoredBC = addRestoreAliasInstructionsToBlock(
+            restoreTypeSizeInBits, restoreNumElements, builderRestartBlock);
+        Value *restored = builderRestartBlock.CreateBitCast(
+            restoredBC, phiLive->getType(), phiLive->getName() + ".restart");
+        restoreLiveValue = restored;
+        CRBH.addToCheckpointMap(liveValue, restored);
+        break;
+      }
+      case Instruction::GetElementPtr: {
+        GetElementPtrInst *gepLive = cast<GetElementPtrInst>(i);
+        // checkpoint
+        addCheckpointAliasInstructionsToBlock(gepLive, PAI, CRBH,
+                                              builderCheckpointBlock);
+        // restore
+        Value *restoredBC = addRestoreAliasInstructionsToBlock(
+            restoreTypeSizeInBits, restoreNumElements, builderRestartBlock);
+        Value *restored = builderRestartBlock.CreateBitCast(
+            restoredBC, gepLive->getType(), gepLive->getName() + ".restart");
+        restoreLiveValue = restored;
+        CRBH.addToCheckpointMap(liveValue, restored);
+        break;
+      }
+      case Instruction::BitCast: {
+        BitCastInst *bcLive = cast<BitCastInst>(i);
+        // checkpoint
+        addCheckpointAliasInstructionsToBlock(bcLive, PAI, CRBH,
+                                              builderCheckpointBlock);
+        // restore
+        Value *restoredBC = addRestoreAliasInstructionsToBlock(
+            restoreTypeSizeInBits, restoreNumElements, builderRestartBlock);
+        Value *restored = builderRestartBlock.CreateBitCast(
+            restoredBC, bcLive->getType(), bcLive->getName() + ".restart");
+        restoreLiveValue = restored;
+        CRBH.addToCheckpointMap(liveValue, restored);
+        break;
+      }
+      default: {
+        errs() << "****** POINTER BEING CHECKPOINTED AS A SCALAR!!!! ******\n";
+        liveValue->dump();
+        i->getType()->dump();
+        PointerType *pty = cast<PointerType>(i->getType());
+        pty->getElementType()->dump();
+        exit(-1);
+      }
+      }
     }
     return restoreLiveValue;
   }
@@ -598,13 +620,6 @@ struct ACRIiLPass : public ModulePass {
       PHINodeMappingToUpdate(PHINode &p, Value *v, unsigned pI)
           : phi(p), value(v), phiIdx(pI) {}
     };
-    struct PHINodeToRemove {
-      PHINode &phi;  // phi to remove
-      Value *value;  // mapping from
-      CFGNode &node; // node this phi is in
-      PHINodeToRemove(PHINode &p, Value *v, CFGNode &n)
-          : phi(p), value(v), node(n) {}
-    };
 
     // Step 1.
     // If    a phi node with the live variable as a value already exists then
@@ -615,7 +630,6 @@ struct ACRIiLPass : public ModulePass {
     // Else in each block, for each live variable
     //      create a phi with a value from each of the predecessors
     std::vector<PHINodeMappingToUpdate> phisToUpdate;
-    std::vector<PHINodeToRemove> phisToRemove;
     for (CFGNode *node : cfgFunction.getNodes()) {
       for (CFGUse live : node->getLiveValues()) {
         Value *value = live.getValue();
@@ -655,19 +669,16 @@ struct ACRIiLPass : public ModulePass {
                 PHINodeMappingToUpdate(*phi, value, phiIdx++));
           }
           node->addLiveMapping(value, phi);
-          // phis are only removed right at the end because then the dominance
-          // has been fixed
-          if (phi->getNumIncomingValues() == 1)
-            phisToRemove.push_back(PHINodeToRemove(*phi, value, *node));
         }
       }
     }
+
     // Step 2.
     // Now that all phi nodes have been created with correct mappings, update
     // the mappings in the phi nodes
     for (PHINodeMappingToUpdate ptu : phisToUpdate) {
       // todo assume instruction for now only
-      if (!isa<Instruction>(ptu.value))
+      if (!ACRIiLUtils::isCheckpointableType(ptu.value))
         continue;
       CFGNode *pred = cfgFunction.findNodeByBasicBlock(
           *ptu.phi.getIncomingBlock(ptu.phiIdx));
@@ -676,26 +687,22 @@ struct ACRIiLPass : public ModulePass {
 
     // Step 3.
     // Clean up phi nodes which were created that have only one input
-    for (PHINodeToRemove ptr : phisToRemove) {
-      // first replace all the uses - this is safe because all the dominance has
-      // been fixed
-      Value *phiReplacment = ptr.phi.getIncomingValue(0);
-      ptr.phi.replaceAllUsesWith(phiReplacment);
-      ptr.phi.eraseFromParent();
-      // update the mapping
-      ptr.node.addLiveMapping(ptr.value, phiReplacment);
-    }
-    for (CFGNode *node : cfgFunction.getNodes()) {
-      std::vector<PHINode *> phis;
-      for (PHINode &phi : node->getLLVMBasicBlock().phis()) {
-        if (phi.hasConstantValue())
-          phis.push_back(&phi);
+    bool removed = false;
+    do {
+      removed = false;
+      for (CFGNode *node : cfgFunction.getNodes()) {
+        std::vector<PHINode *> phis;
+        for (PHINode &phi : node->getLLVMBasicBlock().phis()) {
+          if (phi.hasConstantValue())
+            phis.push_back(&phi);
+        }
+        for (PHINode *phi : phis) {
+          phi->replaceAllUsesWith(phi->hasConstantValue());
+          phi->eraseFromParent();
+          removed = true;
+        }
       }
-      for (PHINode *phi : phis) {
-        phi->replaceAllUsesWith(phi->hasConstantValue());
-        phi->eraseFromParent();
-      }
-    }
+    } while (removed);
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {

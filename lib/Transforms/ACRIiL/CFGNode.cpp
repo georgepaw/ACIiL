@@ -1,7 +1,9 @@
 #include "llvm/Transforms/ACRIiL/CFGNode.h"
+#include "llvm/IR/Argument.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/ACRIiL/ACRIiLUtils.h"
 #include "llvm/Transforms/ACRIiL/CFGFunction.h"
 #include "llvm/Transforms/ACRIiL/CFGModule.h"
 #include "llvm/Transforms/ACRIiL/CFGUse.h"
@@ -16,12 +18,12 @@ void CFGNode::addPointerUses(Value *pointer, BasicBlock *phiBlock) {
   if (it == function.getPointerInformation().end())
     return;
 
-  if (isa<Instruction>(it->second->getTypeSizeInBits()))
+  if (ACRIiLUtils::isCheckpointableType(it->second->getTypeSizeInBits()))
     use.insert(CFGUse(it->second->getTypeSizeInBits(), phiBlock));
-  if (isa<Instruction>(it->second->getNumElements()))
+  if (ACRIiLUtils::isCheckpointableType(it->second->getNumElements()))
     use.insert(CFGUse(it->second->getNumElements(), phiBlock));
   for (Value *alias : it->second->getAliasSet()) {
-    if (isa<Instruction>(alias))
+    if (ACRIiLUtils::isCheckpointableType(alias))
       use.insert(CFGUse(alias, phiBlock));
     // recurse through the pointers of pointers until the allocation
     if (pointer != alias)
@@ -36,7 +38,7 @@ CFGNode::CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f)
     Instruction &inst = *end;
     // get define
     // if it has a non void return then it defines
-    if (!end->getType()->isVoidTy()) {
+    if (!inst.getType()->isVoidTy()) {
 
       def.insert(&inst);
       // since this is SSA, remove the definition from uses set
@@ -49,24 +51,37 @@ CFGNode::CFGNode(BasicBlock &b, bool isPhiNode, CFGFunction &f)
     // get uses
     if (PHINode *phi = dyn_cast<PHINode>(&inst)) {
       // if it's a phi instruction
-      for (Use &u : phi->operands()) {
-        // at the momemnt assume if the operand is a result of instruction then
-        // it should be in use set
-        if (isa<Instruction>(u)) {
+      for (Use &u : phi->incoming_values()) {
+        // at the momemnt assume if the operand is a result of instruction or an
+        // argument then it should be in use set
+        if (ACRIiLUtils::isCheckpointableType(u)) {
           use.insert(CFGUse(u, phi->getIncomingBlock(u)));
           addPointerUses(u, phi->getIncomingBlock(u));
         }
       }
     } else {
       // otherwise just iterate over operands
-      for (Value *v : end->operands()) {
-        // at the momemnt assume if the operand is a result of instruction then
-        // it should be in use set
-        if (isa<Instruction>(v)) {
+      for (Value *v : inst.operands()) {
+        // at the momemnt assume if the operand is a result of instruction or an
+        // argument then it should be in use set
+        if (ACRIiLUtils::isCheckpointableType(v)) {
           use.insert(CFGUse(v));
           addPointerUses(v, nullptr);
         }
       }
+    }
+  }
+  // special case
+  // if it's an entry block
+  // then it also defines the arguments
+  if (&b.getParent()->getEntryBlock() == &b) {
+    for (Argument &arg : b.getParent()->args()) {
+      def.insert(&arg);
+      // since this is SSA, remove the definition from uses set
+      // note this will not remove PHI uses
+      std::set<CFGUse>::iterator it = use.find(CFGUse(&arg));
+      if (it != use.end())
+        use.erase(CFGUse(&arg));
     }
   }
 }

@@ -9,13 +9,22 @@ using namespace llvm;
 PointerAliasInfo::PointerAliasInfo(Value *typeSizeInBits, Value *numElements,
                                    Value *alias)
     : typeSizeInBits(typeSizeInBits), numElements(numElements) {
+  if (!typeSizeInBits || !numElements || !alias) {
+    errs() << "PointerAliasInfo generated with a null\n";
+  }
   aliasSet.insert(alias);
 }
 
 PointerAliasInfo::PointerAliasInfo(Value *typeSizeInBits, Value *numElements,
                                    std::set<Value *> aliasSet)
     : typeSizeInBits(typeSizeInBits), numElements(numElements) {
+  if (!typeSizeInBits || !numElements) {
+    errs() << "PointerAliasInfo generated with a null\n";
+  }
   for (Value *alias : aliasSet) {
+    if (!alias) {
+      errs() << "PointerAliasInfo generated with a null\n";
+    }
     this->aliasSet.insert(alias);
   }
 }
@@ -24,7 +33,7 @@ void PointerAliasInfo::dump() {
   errs() << "Pointer Alias, type size " << *getTypeSizeInBits()
          << " numElements " << *getNumElements()
          << " this pointer points to memory allocated by:\n";
-  errs() << "* " << *getAliasSet().begin() << "\n";
+  errs() << "* " << **getAliasSet().begin() << "\n";
 }
 
 std::set<Value *> &PointerAliasInfo::getAliasSet() { return aliasSet; }
@@ -40,7 +49,7 @@ void AllocationPointerAliasInfo::dump() {
   errs() << "Allocation Pointer, type size " << *getTypeSizeInBits()
          << " numElements " << *getNumElements()
          << " this pointer points to memory allocated by:\n";
-  errs() << "* " << *getAliasSet().begin() << "\n";
+  errs() << "* " << **getAliasSet().begin() << "\n";
 }
 PHINodePointerAliasInfo::PHINodePointerAliasInfo(Value *typeSizeInBits,
                                                  Value *numElements,

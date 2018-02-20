@@ -2,6 +2,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/IR/Argument.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
@@ -57,9 +58,33 @@ CFGNode *CFGFunction::findNodeByBasicBlock(BasicBlock &b) {
 
 void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
 
-  std::set<Value *> unknownSizeAliasPointers;
+  std::set<Instruction *> unknownSizeAliasPointers;
   std::set<PHINode *> unknownSizePHINodeAliasPointers;
   std::set<PHINode *> phis;
+
+  // special case
+  // if the function is called main and has at least 2 arguments
+  if (function.getName() == "main" && function.arg_size() >= 2) {
+    // and the first arguemnt is an int (argc) and second argument is a pointer
+    // (argc)
+    // TODO this needs to handle multidimensional arrays
+    Function::arg_iterator it = function.arg_begin();
+    Value *argc = it;
+    Value *argv = ++it;
+    if (argc->getType() ==
+            Type::getInt32Ty(getParentLLVMModule().getContext()) &&
+        argv->getType() ==
+            PointerType::get(
+                Type::getInt8PtrTy(getParentLLVMModule().getContext()), 0)) {
+      pointerInformation[argv] = new PointerAliasInfo(
+          ConstantInt::get(
+              Type::getInt64Ty(getParentLLVMModule().getContext()),
+              getParentLLVMModule().getDataLayout().getTypeSizeInBits(
+                  argv->getType()),
+              false),
+          argc, argv);
+    }
+  }
 
   // first identify all allocations and PHINodes and set up their sizes and
   // aliases
@@ -68,6 +93,7 @@ void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
       if (!I.getType()->isPtrOrPtrVectorTy())
         continue;
 
+      // TODO this should be a case of CallInst
       if (AllocaInst *ai = dyn_cast<AllocaInst>(&I)) {
         pointerInformation[&I] = new AllocationPointerAliasInfo(
             ConstantInt::get(
@@ -83,18 +109,14 @@ void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
                 false),
             ai);
       } else if (isAllocationFn(&I, &TLI)) {
-        // TODO this needs to be fixed once dealing with dynamic memory
-        // this function only works on malloc like functions it seems?
         CallInst *malloc = extractMallocCall(&I, &TLI);
+        Value *mallocArg = malloc->getArgOperand(0);
+
         pointerInformation[&I] = new AllocationPointerAliasInfo(
             ConstantInt::get(
-                Type::getInt64Ty(getParentLLVMModule().getContext()),
-                getParentLLVMModule().getDataLayout().getTypeSizeInBits(
-                    getMallocAllocatedType(malloc, &TLI)),
-                false),
-            getMallocArraySize(malloc, getParentLLVMModule().getDataLayout(),
-                               &TLI),
-            malloc);
+                Type::getInt64Ty(getParentLLVMModule().getContext()), 8,
+                false), // malloc is in bytes, so convert to bits
+            mallocArg, malloc);
       } else if (PHINode *phi = dyn_cast<PHINode>(&I)) {
         // TODO assuming that the sizeInBits and numElements are 64bit integers
         PHINode *phiTypeSizeInBits = PHINode::Create(
@@ -125,14 +147,8 @@ void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
   while (unknownSizeAliasPointers.size()) {
     errs() << "unknownSizeAliasPointers " << unknownSizeAliasPointers.size()
            << "\n";
-    std::set<Value *> pointersToRemove;
-    for (Value *v : unknownSizeAliasPointers) {
-      if (!isa<Instruction>(v)) {
-        errs() << "Live value does not come from an instruction, not supported "
-                  "at the moment\n";
-        exit(1);
-      }
-      Instruction *I = cast<Instruction>(v);
+    std::set<Instruction *> pointersToRemove;
+    for (Instruction *I : unknownSizeAliasPointers) {
       switch (I->getOpcode()) {
       case Instruction::GetElementPtr: {
         GetElementPtrInst *gep = cast<GetElementPtrInst>(I);
@@ -161,6 +177,20 @@ void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
         }
         break;
       }
+      case Instruction::Load: {
+        // TODO need to deal with offsets in pointers
+        LoadInst *li = cast<LoadInst>(I);
+        Value *pointer = li->getPointerOperand();
+        std::map<Value *, PointerAliasInfo *>::iterator it =
+            pointerInformation.find(pointer);
+        if (it != pointerInformation.end()) {
+          pointerInformation[I] =
+              new PointerAliasInfo(it->second->getTypeSizeInBits(),
+                                   it->second->getNumElements(), pointer);
+          pointersToRemove.insert(I);
+        }
+        break;
+      }
       default: {
         errs() << "****** ACRIiL ********\n";
         errs() << "Pointer " << *I << " is not supported!\n";
@@ -168,7 +198,7 @@ void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
       }
       }
     }
-    for (Value *v : pointersToRemove) {
+    for (Instruction *v : pointersToRemove) {
       unknownSizeAliasPointers.erase(v);
     }
   }
@@ -254,7 +284,6 @@ void CFGFunction::setUpCFG() {
   // first need to prep basic blocks
   // if there are any phi instructions in the basicblock then
   // split the block
-  // if(function.getName() == "main") function.viewCFG();
   std::vector<Instruction *> splitLocations;
   for (BasicBlock &B : function) {
     // According to spec

@@ -279,12 +279,22 @@ void __acriil_restart_read_pointer_from_checkpoint(uint64_t size_bits,
   }
 
   // read the data
-  for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(size_bits) * num_elements; i++) {
-    if (fscanf(fp, "%c", &data[i]) != 1) // read char at a time
+  const uint64_t total_bits = size_bits * num_elements;
+  for (uint64_t i = 0; i < total_bits; i += 8) {
+    char in;
+    if (fscanf(fp, "%c", &in) != 1) // read char at a time
     {
       printf("Restart has failed - body - aborted.\n");
       fclose(fp);
       exit(-1);
+    }
+    // make sure to not overwrite other data
+    if (i + 8 <= total_bits) {
+      data[i / 8] = in;
+    } else {
+      uint64_t diff = total_bits - i;
+      uint8_t mask = (~0 << diff);
+      data[i / 8] = (data[i / 8] & mask) | (in & ~mask);
     }
   }
   if (fscanf(fp, "%c", &new_line) != 1 || new_line != '\n') {

@@ -22,6 +22,8 @@ vecadd_ptrswp: vecadd_ptrswp.o
 
 jacobi: jacobi.o
 
+jacobi-malloc: jacobi-malloc.o
+
 %.bc: %.c
 	$(CC) -O3 -c -emit-llvm $<
 

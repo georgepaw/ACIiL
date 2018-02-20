@@ -147,9 +147,9 @@ void __acriil_checkpoint_pointer(uint64_t element_size_bits,
   fprintf(fp, "\n");
 
   // then dump the binary data (round to a byte size)
-  for (uint64_t i = 0;
-       i < ROUND_BITS_TO_BYTES(element_size_bits) * num_elements; i++) {
-    fprintf(fp, "%c", data[i]);
+  const uint64_t total_bits = element_size_bits * num_elements;
+  for (uint64_t i = 0; i < total_bits; i += 8) {
+    fprintf(fp, "%c", data[i / 8]);
   }
   fprintf(fp, "\n");
 
