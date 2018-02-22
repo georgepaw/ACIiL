@@ -40,13 +40,13 @@ void __acriil_checkpoint_setup() {
   const char *s = getenv("ACRIIL_CHECKPOINT_INTERVAL");
   if (s) {
     char *end;
-    uint64_t val = strtoull(s, &end, 10);
+    double val = strtod(s, &end);
     if (s != end) {
-      __acriil_checkpoint_interval = val;
+      __acriil_checkpoint_interval = val * 1000000;
     }
   }
-  printf("*** ACRIiL - checkpoint interval is %" PRIu64 "micros ***\n",
-         __acriil_checkpoint_interval);
+  printf("*** ACRIiL - checkpoint interval is %.2lf s ***\n",
+         ((double)__acriil_checkpoint_interval) / 1000000.0);
 
   __acriil_next_checkpoint_time = micros + __acriil_checkpoint_interval;
   __acriil_checkpoint_skip = 1;
