@@ -99,17 +99,17 @@ uint8_t __acriil_checkpoint_valid(int64_t num_variables) {
       return 0;
     // read the header
     uint64_t alias = 0;
-    uint64_t size = 0;
+    uint64_t size_bits = 0;
     uint64_t num_elements = 0;
     char new_line;
     if (fscanf(fp, "alias%" PRIi64 "%c", &alias, &new_line) != 2 ||
-        new_line != '\n') // read size
+        new_line != '\n') // read alias
     {
       fclose(fp);
       return 0;
     }
-    if (fscanf(fp, "%" PRIi64 "%c", &size, &new_line) != 2 ||
-        new_line != '\n') // read size
+    if (fscanf(fp, "%" PRIi64 "%c", &size_bits, &new_line) != 2 ||
+        new_line != '\n') // read size_bits
     {
       fclose(fp);
       return 0;
@@ -137,7 +137,8 @@ uint8_t __acriil_checkpoint_valid(int64_t num_variables) {
       }
     } else {
       // read the data
-      for (uint64_t i = 0; i < ROUND_BITS_TO_BYTES(size) * num_elements; i++) {
+      const uint64_t total_bits = size_bits * num_elements;
+      for (uint64_t i = 0; i < total_bits; i += 8) {
         char c;
         if (fscanf(fp, "%c", &c) != 1) // read char at a time
         {

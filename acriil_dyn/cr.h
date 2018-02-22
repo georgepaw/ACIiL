@@ -4,8 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ROUND_BITS_TO_BYTES(bits) ((bits + 7) / 8)
-
 char *__acriil_merge_char_arrays(const char *path, const char *file_name) {
   size_t path_len = strlen(path);
   size_t file_name_len = strlen(file_name);

@@ -153,49 +153,20 @@ struct ACRIiLPass : public ModulePass {
   }
 
   bool addCheckpointsToFunction(CFGFunction &cfgFunction) {
-    std::vector<CFGNode *> nodesToCheckpoint;
-    // insert the checkpoint and restart blocks
-    // the blocks are empty at first, just with correct branching
-    for (CFGNode *cfgNode : cfgFunction.getNodes()) {
-      // don't checkpoint phiNodes
-      if (cfgNode->isPhiNode())
-        continue;
-      // don't do this for the entry block or the exit blocks
-      BasicBlock &B = cfgNode->getLLVMBasicBlock();
-      unsigned numSuccessors = std::distance(succ_begin(&B), succ_end(&B));
-      unsigned numPredecessors = std::distance(pred_begin(&B), pred_end(&B));
-      if (numSuccessors == 0 || numPredecessors == 0)
-        continue;
-      if (numPredecessors != 1)
-        continue;
-      // Simple heuristic -
-      // skip block if it's single predecessor was not a PHI node
-      // this will make sure one checkpoint per loop
-      // TODO change this
-      if (!cfgFunction
-               .findNodeByBasicBlock(
-                   *cfgNode->getLLVMBasicBlock().getSinglePredecessor())
-               ->isPhiNode())
-        continue;
-      // skip a block if it has no live variables
-      if (cfgNode->getLiveValues().size() == 0)
-        continue;
-
-      nodesToCheckpoint.push_back(cfgNode);
-    }
+    // if no checkpoints are to be performed then just return now
+    if (cfgFunction.getNodesToCheckpoint().size() == 0)
+      return true;
 
     std::vector<CheckpointRestartBlockHelper> checkpointAndRestartBlocks;
     uint64_t nextCheckpointLabel = 0;
-    for (CFGNode *cfgNode : nodesToCheckpoint) {
+    // insert the checkpoint and restart blocks
+    // the blocks are empty at first, just with correct branching
+    for (CFGNode *cfgNode : cfgFunction.getNodesToCheckpoint()) {
       checkpointAndRestartBlocks.push_back(
           createCheckpointAndRestartBlocksForNode(cfgNode,
                                                   nextCheckpointLabel++));
     }
-
-    // if no checkpoints were inserted then just return now
-    if (checkpointAndRestartBlocks.size() == 0)
-      return true;
-    // otherwise insert the restart function and add the branch instructions for
+    // insert the restart function and add the branch instructions for
     // a restart
     insertRestartBlock(cfgFunction, checkpointAndRestartBlocks);
 
@@ -708,16 +679,19 @@ struct ACRIiLPass : public ModulePass {
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<TargetLibraryInfoWrapperPass>();
     AU.addRequired<AAResultsWrapperPass>();
+    AU.addRequired<LoopInfoWrapperPass>();
   }
 };
 } // namespace
 
 INITIALIZE_PASS_BEGIN(ACRIiLPass, "ACRIiL",
-                      "Automatic Checkpoint/Restart Insertion Pass", true, true)
+                      "Automatic Checkpoint/Restart Insertion Pass", false,
+                      false)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_END(ACRIiLPass, "ACRIiL",
-                    "Automatic Checkpoint/Restart Insertion Pass", true, true)
+                    "Automatic Checkpoint/Restart Insertion Pass", false, false)
 
 char ACRIiLPass::ID = 0;
 

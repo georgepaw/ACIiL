@@ -1,5 +1,6 @@
 #include "llvm/Transforms/ACRIiL/CFGFunction.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Argument.h"
@@ -22,10 +23,12 @@
 using namespace llvm;
 
 CFGFunction::CFGFunction(Function &f, CFGModule &m, TargetLibraryInfo &TLI,
-                         AliasAnalysis *AA)
+                         ModulePass *mp)
     : function(f), am(*this), module(m) {
-  pointerAnalysis(TLI, AA);
-  setUpCFG();
+  if (f.isDeclaration())
+    return;
+  pointerAnalysis(TLI, mp);
+  setUpCFG(findCheckpointPoints(mp));
   doLiveAnalysis();
   setUpLiveSetsAndMappings();
 }
@@ -42,8 +45,10 @@ CFGFunction::~CFGFunction() {
   }
 }
 
-void CFGFunction::addNode(BasicBlock &b, bool isPhiNode) {
-  nodes.push_back(new CFGNode(b, isPhiNode, *this));
+CFGNode &CFGFunction::addNode(BasicBlock &b, bool isPhiNode) {
+  CFGNode *node = new CFGNode(b, isPhiNode, *this);
+  nodes.push_back(node);
+  return *node;
 }
 
 // TODO this needs to be improved, should the data structure be e vector? Not
@@ -56,8 +61,21 @@ CFGNode *CFGFunction::findNodeByBasicBlock(BasicBlock &b) {
   return NULL;
 }
 
-void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
+std::set<BasicBlock *> CFGFunction::findCheckpointPoints(ModulePass *mp) {
+  std::set<BasicBlock *> result;
+  LoopInfo &LI = mp->getAnalysis<LoopInfoWrapperPass>(function).getLoopInfo();
+  for (LoopInfo::iterator it = LI.begin(); it != LI.end(); it++) {
+    Loop *l = *it;
+    // TODO for now only checkpoint the most outerloop
+    if (l->getLoopDepth() == 1)
+      result.insert(l->getHeader());
+  }
+  return result;
+}
 
+void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, ModulePass *mp) {
+  AAResults &AA =
+      mp->getAnalysis<AAResultsWrapperPass>(function).getAAResults();
   std::set<Instruction *> unknownSizeAliasPointers;
   std::set<PHINode *> unknownSizePHINodeAliasPointers;
   std::set<PHINode *> phis;
@@ -252,7 +270,7 @@ void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
       for (Value *alias : phiPAI->getAliasSet()) {
         if (PHINode *aliasedPhi = dyn_cast<PHINode>(alias)) {
           for (Value *v : pointerInformation[aliasedPhi]->getAliasSet())
-            if (AA->alias(MemoryLocation(phi), MemoryLocation(v)) !=
+            if (AA.alias(MemoryLocation(phi), MemoryLocation(v)) !=
                 AliasResult::NoAlias)
               valuesToAdd.push_back(v);
           valuesToRemove.push_back(alias);
@@ -280,7 +298,7 @@ void CFGFunction::pointerAnalysis(TargetLibraryInfo &TLI, AliasAnalysis *AA) {
   // }
 }
 
-void CFGFunction::setUpCFG() {
+void CFGFunction::setUpCFG(std::set<BasicBlock *> checkpointBlocks) {
   // first need to prep basic blocks
   // if there are any phi instructions in the basicblock then
   // split the block
@@ -301,15 +319,24 @@ void CFGFunction::setUpCFG() {
   // Once all the locations to split on have been found then perform the splits
   for (Instruction *I : splitLocations) {
     BasicBlock *B = I->getParent();
-    B->splitBasicBlock(I, B->getName() + ".no_phis");
+    BasicBlock *newB = B->splitBasicBlock(I, B->getName() + ".no_phis");
     phiNodes.insert(B);
+    // make sure when splitting blocks to change the blocks to checkpoint
+    // otherwise we will try to checkpoint PHI nodes which will not work
+    std::set<BasicBlock *>::iterator it = checkpointBlocks.find(B);
+    if (it != checkpointBlocks.end()) {
+      checkpointBlocks.erase(B);
+      checkpointBlocks.insert(newB);
+    }
   }
 
   // Now that blocks are ready, set up the CFG graph for the function
   // get all the nodes
   for (BasicBlock &B : function) {
     bool isPhiNode = phiNodes.find(&B) != phiNodes.end();
-    addNode(B, isPhiNode);
+    CFGNode &node = addNode(B, isPhiNode);
+    if (checkpointBlocks.find(&B) != checkpointBlocks.end())
+      nodesToCheckpoint.insert(&node);
   }
 
   // get all the edges
@@ -394,32 +421,32 @@ std::vector<CFGNode *> &CFGFunction::getNodes() { return nodes; }
 
 CFGNode &CFGFunction::addCheckpointNode(BasicBlock &b, CFGNode &nodeForCR) {
   // add the node
-  addNode(b, false);
+  CFGNode &cNode = addNode(b, false);
   // copy the live set and set up mapping
   for (CFGUse use : nodeForCR.getLiveValues()) {
-    nodes.back()->getLiveValues().insert(use);
-    nodes.back()->addLiveMapping(use.getValue(), use.getValue());
+    cNode.getLiveValues().insert(use);
+    cNode.addLiveMapping(use.getValue(), use.getValue());
   }
-  return *nodes.back();
+  return cNode;
 }
 
 CFGNode &CFGFunction::addRestartNode(BasicBlock &b, CFGNode &nodeForCR) {
   // add the node
-  addNode(b, false);
+  CFGNode &rNode = addNode(b, false);
   // nothing is live before the restart block so don't copy the in set
   // set up the mapping
   for (CFGUse use : nodeForCR.getLiveValues())
-    nodes.back()->addLiveMapping(use.getValue(), use.getValue());
-  return *nodes.back();
+    rNode.addLiveMapping(use.getValue(), use.getValue());
+  return rNode;
 }
 
 CFGNode &CFGFunction::addNoCREntryNode(BasicBlock &b) {
   // add the node
-  addNode(b, false);
+  CFGNode &entryNode = addNode(b, false);
   // set up the mapping for all variables that are *defined*
   for (Value *op : nodes.back()->getDef())
-    nodes.back()->addLiveMapping(op, op);
-  return *nodes.back();
+    entryNode.addLiveMapping(op, op);
+  return entryNode;
 }
 
 ACRIiLAllocaManager &CFGFunction::getAllocManager() { return am; }
@@ -430,4 +457,8 @@ Module &CFGFunction::getParentLLVMModule() { return module.getLLVMModule(); }
 
 std::map<Value *, PointerAliasInfo *> &CFGFunction::getPointerInformation() {
   return pointerInformation;
+}
+
+std::set<CFGNode *> &CFGFunction::getNodesToCheckpoint() {
+  return nodesToCheckpoint;
 }

@@ -26,11 +26,7 @@ void CFGModule::setUpCFGs(ModulePass *mp) {
   TargetLibraryInfo &TLI =
       mp->getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
   for (Function &F : module) {
-    AAResults *AA =
-        F.isDeclaration()
-            ? nullptr
-            : &mp->getAnalysis<AAResultsWrapperPass>(F).getAAResults();
-    functions.insert(std::make_pair(&F, new CFGFunction(F, *this, TLI, AA)));
+    functions.insert(std::make_pair(&F, new CFGFunction(F, *this, TLI, mp)));
   }
 }
 
