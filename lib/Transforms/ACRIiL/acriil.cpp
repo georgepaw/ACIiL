@@ -95,6 +95,12 @@ struct ACRIiLPass : public ModulePass {
       errs() << "could not load the restart bitcode, nothing to be done\n";
       return false;
     }
+    std::unique_ptr<Module> ACRIiLStateModule =
+        parseIRFile("ACRIiLState.bc", error, M.getContext());
+    if (!ACRIiLStateModule) {
+      errs() << "could not load the ACRIiLState bitcode, nothing to be done\n";
+      return false;
+    }
 
     // set up the types
     i64Type = IntegerType::getInt64Ty(M.getContext());
@@ -119,13 +125,18 @@ struct ACRIiLPass : public ModulePass {
       errs() << "Failed linking in the restart code.\n";
       return false;
     }
+    ApplicableFlags = Linker::Flags::OverrideFromSrc;
+    if (Linker::linkModules(M, std::move(ACRIiLStateModule), ApplicableFlags)) {
+      errs() << "Failed linking in the ACRIiLState code.\n";
+      return false;
+    }
 
     // load the checkpointing functions
-    acriilCheckpointSetup = M.getFunction("__acriil_checkpoint_setup");
-    acriilCheckpointStart = M.getFunction("__acriil_checkpoint_start");
-    acriilCheckpointPointer = M.getFunction("__acriil_checkpoint_pointer");
-    acriilCheckpointAlias = M.getFunction("__acriil_checkpoint_alias");
-    acriilCheckpointFinish = M.getFunction("__acriil_checkpoint_finish");
+    acriilCheckpointSetup = M.getFunction("__acriilCheckpointSetup");
+    acriilCheckpointStart = M.getFunction("__acriilCheckpointStart");
+    acriilCheckpointPointer = M.getFunction("__acriilCheckpointPointer");
+    acriilCheckpointAlias = M.getFunction("__acriilCheckpointAlias");
+    acriilCheckpointFinish = M.getFunction("__acriilCheckpointFinish");
     if (!acriilCheckpointSetup || !acriilCheckpointStart ||
         !acriilCheckpointPointer || !acriilCheckpointFinish ||
         !acriilCheckpointAlias) {
@@ -134,21 +145,19 @@ struct ACRIiLPass : public ModulePass {
       return false;
     }
     // load the restart functions
-    acriilRestartGetLabel = M.getFunction("__acriil_restart_get_label");
+    acriilRestartGetLabel = M.getFunction("__acriilRestartGetLabel");
     acriilRestartReadPointerFromCheckpoint =
-        M.getFunction("__acriil_restart_read_pointer_from_checkpoint");
+        M.getFunction("__acriilRestartReadPointerFromCheckpoint");
     acriilRestartReadAliasFromCheckpoint =
-        M.getFunction("__acriil_restart_read_alias_from_checkpoint");
-    acriilRestartFinish = M.getFunction("__acriil_restart_finish");
+        M.getFunction("__acriilRestartReadAliasFromCheckpoint");
+    acriilRestartFinish = M.getFunction("__acriilRestartFinish");
     if (!acriilRestartGetLabel || !acriilRestartReadPointerFromCheckpoint ||
         !acriilRestartReadAliasFromCheckpoint || !acriilRestartFinish) {
       errs() << "could not load the restarting functions, checkpointing will "
                 "not be added\n";
       return false;
     }
-    // get the main cfg
-    CFGFunction &cfgMain = cfgModule.getEntryFunction();
-    bool changed = addCheckpointsToFunction(cfgMain);
+    bool changed = addCheckpointsToFunction(cfgModule.getEntryFunction());
     return changed;
   }
 
@@ -376,7 +385,10 @@ struct ACRIiLPass : public ModulePass {
       // errs() << "Already checkpointed\n";
       return CRBH.checkpointedToRestoreMap.find(liveValue)->second;
     }
-
+    if (!isa<Instruction>(liveValue)) {
+      errs() << "TODO NEED TO SUPPORT OTHER TYPES\n";
+      exit(-1);
+    }
     Instruction *i = cast<Instruction>(liveValue);
     TargetLibraryInfo &TLI =
         getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();

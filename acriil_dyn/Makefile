@@ -3,9 +3,9 @@ LLVM_BIN_ROOT ?= ../../llvm-dbg/bin/
 CC  = $(LLVM_BIN_ROOT)clang
 CXX = $(LLVM_BIN_ROOT)clang++
 
-CFLAGS=-flto -O3 -v
+CFLAGS=-flto -O3
 
-LDFLAGS=-lm -v
+LDFLAGS= -lm -lstdc++
 
 .PHONY: cr clean
 
@@ -24,10 +24,14 @@ jacobi: jacobi.o
 
 jacobi-malloc: jacobi-malloc.o
 
-%.bc: %.c
-	$(CC) -O3 -c -emit-llvm $<
+jacobi-global-vars: jacobi-global-vars.o
 
-cr: checkpoint.bc restart.bc
+test: test.o
+
+%.bc: %.cpp
+	$(CXX) -std=c++11 -O3 -c -emit-llvm $<
+
+cr: checkpoint.bc restart.bc ACRIiLState.bc
 
 clean:
 	rm -rf .acriil_chkpnt-*
